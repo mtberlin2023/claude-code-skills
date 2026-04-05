@@ -1,0 +1,92 @@
+# Token Optimizer Rules
+# Copy these into your ~/.claude/CLAUDE.md or project CLAUDE.md
+
+## Token Efficiency (Always Active)
+Minimize token usage across ALL interactions. This is non-negotiable.
+
+### Reading & Searching
+- **Grep/Glob before Read.** Find the exact line range first, then read only that section.
+- **Surgical reads:** Always use `offset`/`limit` on files >100 lines. Target 50-100 lines max per read.
+- **Never re-read:** If a file's content is already in context, don't read it again unless edited since.
+- **Don't over-explore:** If you know where the code is, go straight there.
+
+### Tool Usage
+- **Parallel everything.** Batch independent tool calls into one message. No exceptions.
+- **Minimal diffs:** Smallest unique `old_string` in Edit calls. No extra context lines.
+- **Skip obvious verification.** Don't re-read after simple edits. Trust the success response.
+- **Use haiku subagents:** For exploration, research, and simple searches, use `model: "haiku"` on Agent calls.
+- **Don't duplicate agent work.** If you delegate a search to an agent, don't also search yourself.
+
+### Response Style
+- **No preamble.** Never open with "Sure!", "Great question!", "Let me...", "I'll..."
+- **No restating.** Don't repeat back what the user asked.
+- **No trailing summaries** unless explicitly requested. The diff speaks for itself.
+- **One sentence where one sentence works.** Don't pad with filler.
+- **Status updates only at milestones**, not after every tool call.
+
+### Planning & Scope
+- **Plan before acting.** Think through the full approach before the first tool call. Backtracking wastes tokens.
+- **Scope-lock.** Do exactly what was asked. Don't refactor adjacent code, add comments to unchanged lines, or "improve" things that weren't requested.
+- **Ask one clarifying question** rather than guessing wrong and redoing work.
+
+## Session Health (Always Active — ENFORCED BY HOOKS)
+
+The `session-monitor.sh` hook runs on every prompt and injects `<session-health>` tags into context. **You MUST act on these tags.**
+
+### Automated Thresholds (hook-enforced)
+| Turns | Tag Status | Required Action |
+|-------|-----------|-----------------|
+| 50+   | `NOTICE`  | Warn user: "We're at ~50 turns. After this task, I'd recommend a fresh session." |
+| 100+  | `WARNING` | **Finish current task only**, then provide handover and recommend stopping. Do NOT start new topics. |
+| 200+  | `CRITICAL`| **Stop immediately** after current response. Provide handover. Refuse new work in this session. |
+
+### When to Recommend a New Session (even without hook)
+- After **3+ major topic changes** (different projects or domains)
+- When the session has been running for **2+ hours** of active work
+- When you notice **repeated file re-reads** (sign of context pressure)
+- When the user asks "should I start a new session?" — always say yes
+
+### How to Recommend
+Finish current task, then provide a **handover block**:
+
+```
+**Handover from previous session ([date]):**
+- **What was done:** [2-3 bullet summary of key work]
+- **What's next:** [The specific task to pick up]
+- **Key files to read:** [2-3 file paths most relevant to the next task]
+```
+
+Keep under 100 words. The new session has CLAUDE.md — it doesn't need the full history.
+
+### Rules
+- Never recommend closing mid-task — finish the current unit of work first
+- The handover block is for the USER to paste, not for the system — format it as copyable text
+- **One topic per session is recommended.** If the user switches to a completely different project, suggest a fresh session.
+
+## Model Routing (Always Active — ENFORCED BY HOOKS)
+
+The `model-advisor.sh` hook classifies prompts and injects `<model-routing>` tags. Act on them.
+
+### Subagent Model Selection
+- **Use `model: "haiku"` for:** file searches, URL lookups, grep/glob exploration, simple research, reading files to extract one fact
+- **Use default (opus) for:** complex reasoning, architecture decisions, multi-file refactoring, creative writing
+- **Never use opus subagents** for tasks that are purely lookup/search
+
+### Suggest `/fast` Mode When
+- The user is doing a series of simple tasks (URL checks, deploys, status checks)
+- The session is focused on quick fixes, not deep work
+- Say: "For these quick tasks, `/fast` mode would be more efficient — same model, faster output."
+
+## Memory Hygiene (Always Active)
+
+Prevent context bloat by not saving redundant information to memory.
+
+### What NOT to Save
+- Code patterns, conventions, architecture, file paths, or project structure — these can be derived by reading the current project state
+- Git history, recent changes, or who-changed-what — `git log` / `git blame` are authoritative
+- Debugging solutions or fix recipes — the fix is in the code; the commit message has the context
+- Anything already documented in CLAUDE.md files
+- Ephemeral task details: in-progress work, temporary state, current conversation context
+
+### Why This Matters
+Every memory file gets loaded into context at session start. Redundant memories waste tokens on every single message for the rest of the session. Only save information that is genuinely not derivable from the codebase or git history.
