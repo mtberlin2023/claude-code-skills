@@ -219,7 +219,8 @@ if pct_wk is not None and pct_wk >= 60 and rst_wk:
 
 cap_str = (" · " + " · ".join(cap_segments)) if cap_segments else ""
 
-print(f"{emoji} {turns} turns → {r_fmt} next turn{action_str}{err_flag}{cap_str}")
+turn_word = "turn" if turns == 1 else "turns"
+print(f"{emoji} {turns} {turn_word} → {r_fmt} next turn{action_str}{err_flag}{cap_str}")
 PYEOF
 )
 
