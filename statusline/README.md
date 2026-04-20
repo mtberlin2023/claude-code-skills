@@ -29,7 +29,7 @@ The action at the right-hand side (`/log after task`, `/log now`, `/log before n
 
 ## What every chip means
 
-**Base state.** `🟢 5 turns → 42K next turn` — turn count (counted from genuine user messages, not tool cycles), arrow, next-turn replay in K or M.
+**Base state.** `🟢 [5] 42K next turn` — turn count in brackets (counted from genuine user messages, not tool cycles), then next-turn replay in K or M. The count is bracketed and the word "turns" is dropped on purpose: the headline cost is the K tokens, not the turn count.
 
 **Error chip** — `⚠ 4KB err` — a cached `tool_result` error over 2 KB is sitting in your transcript. Every remaining turn replays it. A single 8 KB traceback plus 1,000 more turns is several million tokens of pure waste. The chip tells you it's there; `/log` clears it.
 

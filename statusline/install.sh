@@ -139,7 +139,7 @@ c_green "───────────────────────�
 echo
 c_dim "Next step:"
 echo "  Open a new Claude Code session. The bottom-left bar will show:"
-echo "    🟢 N turns → XK next turn [· action] [· 5h cap] [· wk cap] [· runway]"
+echo "    🟢 [N] XK next turn [· action] [· 5h cap] [· wk cap] [· runway]"
 echo
 c_dim "Customise the action slash command (optional):"
 echo "  export CLAUDE_CODE_STATUSLINE_ACTION=/compact   # default: /log"

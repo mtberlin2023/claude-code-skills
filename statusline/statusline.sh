@@ -2,7 +2,10 @@
 # Claude Code statusline — next-turn replay cost tracker
 #
 # Reads stdin JSON (Claude Code statusLine contract), outputs one line.
-# Format: [emoji] [N] turns → [Y]K next turn [· action] [· err] [· 5h cap] [· wk cap] [· runway]
+# Format: [emoji] [N] [Y]K next turn [· action] [· err] [· 5h cap] [· wk cap] [· runway]
+# [N] is the turn count in brackets. We keep the count compact and omit the word "turns"
+# because the headline cost number is the K tokens, not the turn count — turns are a weak
+# proxy (a short heavy-context session can replay more per turn than a long lightweight one).
 #
 # Driver: next-turn replay R = last assistant usage.cache_read + cache_creation + input.
 # This is the actual cost you pay per turn — a short session that loaded heavy
@@ -219,8 +222,7 @@ if pct_wk is not None and pct_wk >= 60 and rst_wk:
 
 cap_str = (" · " + " · ".join(cap_segments)) if cap_segments else ""
 
-turn_word = "turn" if turns == 1 else "turns"
-print(f"{emoji} {turns} {turn_word} → {r_fmt} next turn{action_str}{err_flag}{cap_str}")
+print(f"{emoji} [{turns}] {r_fmt} next turn{action_str}{err_flag}{cap_str}")
 PYEOF
 )
 
