@@ -36,10 +36,18 @@
 # at current burn rate) exceeds wall-clock hours until reset × 1.2 (20%
 # headroom). When the projection says you won't make it, the chip fires — even
 # below the old 75%/60% thresholds. When the projection says you will make it,
-# the chip disappears — even above them. Falls back to the pre-projection
-# pure-% trigger when runway is undefined (too little activity data yet).
-# 5h burn rate is averaged over a short rolling window (compute_5h_runway);
-# wk burn rate is the since-reset average (compute_runway).
+# the chip disappears — even above them.
+#
+# Floor: no chip below MIN_FLOOR_PCT (30%) regardless of projection. Short
+# bursts early in a window produce a high short-horizon burn rate; without a
+# floor the chip fires at 8–10% used. At that pct you have too much room for
+# a transient spike to be actionable. The hard-critical tiers (≥90% 5h,
+# ≥85% wk) still always show.
+#
+# Falls back to the pre-projection pure-% trigger (75% 5h, 60% wk) when runway
+# is undefined (too little activity data yet). 5h burn rate is averaged over a
+# short rolling window (compute_5h_runway); wk burn rate is the since-reset
+# average (compute_runway).
 #
 # Reset times come from rate_limits.{five_hour,seven_day}.resets_at (unix seconds, local TZ).
 # Silent on failure.
@@ -203,6 +211,12 @@ def fmt_reset_long(ts):
 HEADROOM = 1.2  # 20% buffer — chip suppressed when runway > wall_time × HEADROOM
 FALLBACK_5H_PCT = 75.0  # used only when runway is undefined (insufficient data)
 FALLBACK_WK_PCT = 60.0
+MIN_FLOOR_PCT = 30.0  # never fire below this, regardless of projection — stops
+# early-window spikes (short-horizon burn rate extrapolated forward) from crying
+# wolf at 8%, 12%, etc. At <30% of the cap you have too much room left for a
+# transient burst to be actionable.
+HARD_CRIT_5H = 90.0
+HARD_CRIT_WK = 85.0
 
 now_ts = time.time()
 
@@ -215,15 +229,21 @@ try:
 except Exception:
     forecast_gap = None
 
-def projection_unsafe(runway, wall_hours, fallback_pct, pct_used):
-    """Return True if the cap chip should fire.
+def should_show_cap(runway, wall_hours, pct_used, fallback_pct, hard_crit_pct):
+    """Decide whether to show the cap chip.
 
-    runway > wall × HEADROOM → safe (suppress).
-    runway undefined → fall back to the old pure-% gate.
+    Order of tests:
+    1. ≥ hard_crit → always show (at the ceiling, projection irrelevant).
+    2. pct < MIN_FLOOR_PCT → never show (too early to panic).
+    3. runway undefined (insufficient data) → fall back to the old pure-% gate.
+    4. runway > wall × HEADROOM → safe, suppress.
+    5. else → show.
     """
-    if runway is None:
-        return pct_used >= fallback_pct
-    if wall_hours is None or wall_hours <= 0:
+    if pct_used >= hard_crit_pct:
+        return True
+    if pct_used < MIN_FLOOR_PCT:
+        return False
+    if runway is None or wall_hours is None or wall_hours <= 0:
         return pct_used >= fallback_pct
     return runway <= wall_hours * HEADROOM
 
@@ -238,10 +258,10 @@ if pct_5h is not None and forecast_gap is not None and rst_5h:
 
 if pct_5h is not None:
     wall_5h = ((rst_5h - now_ts) / 3600.0) if rst_5h else None
-    if projection_unsafe(runway_5h, wall_5h, FALLBACK_5H_PCT, pct_5h):
+    if should_show_cap(runway_5h, wall_5h, pct_5h, FALLBACK_5H_PCT, HARD_CRIT_5H):
         rs = fmt_reset_short(rst_5h)
         suffix = f"→{rs}" if rs else ""
-        if pct_5h >= 90:
+        if pct_5h >= HARD_CRIT_5H:
             cap_segments.append(f"🚨 {int(pct_5h)}%·5h{suffix}")
         else:
             cap_segments.append(f"⚠ {int(pct_5h)}%·5h{suffix}")
@@ -256,10 +276,10 @@ if pct_wk is not None and forecast_gap is not None and rst_wk:
 wk_shown = False
 if pct_wk is not None:
     wall_wk = ((rst_wk - now_ts) / 3600.0) if rst_wk else None
-    if projection_unsafe(runway_wk, wall_wk, FALLBACK_WK_PCT, pct_wk):
+    if should_show_cap(runway_wk, wall_wk, pct_wk, FALLBACK_WK_PCT, HARD_CRIT_WK):
         rs = fmt_reset_long(rst_wk)
         suffix = f"→{rs}" if rs else ""
-        if pct_wk >= 85:
+        if pct_wk >= HARD_CRIT_WK:
             cap_segments.append(f"🚨 {int(pct_wk)}%·wk{suffix}")
         else:
             cap_segments.append(f"⚠ {int(pct_wk)}%·wk{suffix}")
