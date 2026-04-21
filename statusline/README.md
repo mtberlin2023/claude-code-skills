@@ -33,9 +33,11 @@ The action at the right-hand side (`/log after task`, `/log now`, `/log before n
 
 **Error chip** — `⚠ 4KB err` — a cached `tool_result` error over 2 KB is sitting in your transcript. Every remaining turn replays it. A single 8 KB traceback plus 1,000 more turns is several million tokens of pure waste. The chip tells you it's there; `/log` clears it.
 
-**5-hour cap chip** — `⚠ 82%·5h→18:30` or `🚨 94%·5h→18:30` — the 5-hour burst limit, with its reset time. Hidden below 75% used.
+**5-hour cap chip** — `⚠ 82%·5h→18:30` or `🚨 94%·5h→18:30` — the 5-hour burst limit, with its reset time. Fires only when the projection says you won't make it to reset: burn rate (averaged over the last half-hour of activity) times wall-clock time until reset would push you past 100% — with a 20% headroom buffer. Tier is `🚨` at ≥90% used, `⚠` otherwise.
 
-**Weekly cap chip** — `⚠ 67%·wk→Thu 21:00` or `🚨 91%·wk→Thu 21:00` — the 7-day limit, with its reset time (day-of-week because it's usually more than a day away). Hidden below 60% used.
+**Weekly cap chip** — `⚠ 67%·wk→Thu 21:00` or `🚨 91%·wk→Thu 21:00` — the 7-day limit, with its reset time (day-of-week because it's usually more than a day away). Same projection gate, using the since-reset burn rate. Tier is `🚨` at ≥85% used, `⚠` otherwise.
+
+Each cap projects independently. Below the old 75%/60% numbers the chip can still fire if the projection says unsafe; above them it can still be hidden if the projection clears. When there isn't enough activity data yet to compute a runway (fresh reset, quiet start), the chip falls back to the old pure-% trigger so a cold-start session still warns you.
 
 **Runway chip** — `🕐 16h @ avg` — how many active Claude-hours remain in your weekly budget at the current burn rate. Integer above 10h, 0.5h increments below. Only rendered when the weekly cap chip is visible (below the warning threshold, the number isn't behaviourally interesting yet). Colour-coded: neutral above 10h, yellow below 10h, red below 3h.
 

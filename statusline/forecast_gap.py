@@ -24,6 +24,8 @@ CACHE_PATH = Path.home() / ".claude" / "hooks" / ".forecast-cache.json"
 CACHE_TTL_SECONDS = 300
 GAP_SECONDS = 600  # 10-min gap rule for active-block detection
 WEEK_SECONDS = 7 * 86400
+FIVE_HOUR_SECONDS = 5 * 3600
+THIRTY_MIN_SECONDS = 30 * 60
 
 
 def _iter_event_timestamps(project_slug, since_epoch):
@@ -52,8 +54,7 @@ def _iter_event_timestamps(project_slug, since_epoch):
             continue
 
 
-def _active_hours(project_slug, since_epoch):
-    timestamps = sorted(_iter_event_timestamps(project_slug, since_epoch))
+def _active_hours_from_sorted(timestamps):
     if not timestamps:
         return 0.0
     total = 0.0
@@ -66,6 +67,10 @@ def _active_hours(project_slug, since_epoch):
         last = t
     total += last - block_start
     return total / 3600.0
+
+
+def _active_hours(project_slug, since_epoch):
+    return _active_hours_from_sorted(sorted(_iter_event_timestamps(project_slug, since_epoch)))
 
 
 def _load_cache():
@@ -116,6 +121,51 @@ def compute_runway(project_slug, pct_used, reset_epoch):
     cache[cache_key] = {"runway": runway, "worked": worked, "cached_at": now}
     _save_cache(cache)
     return runway, worked
+
+
+def compute_5h_runway(project_slug, pct_used, reset_epoch):
+    """Returns (runway_hours_or_None, active_hours_worked_in_recent_window).
+
+    Burn rate for the 5h cap is averaged over the last `THIRTY_MIN_SECONDS`
+    of activity, not over the full since-reset window. Early in a 5h window
+    the cumulative rate is noisy; a rolling short-horizon average reacts
+    faster to bursts and quiescent periods alike. Uses event-density as a
+    proxy for the % burned in that short window, since the statusline only
+    sees cumulative pct_used.
+    """
+    try:
+        pct_used = float(pct_used)
+        reset_epoch = float(reset_epoch)
+    except (TypeError, ValueError):
+        return None, 0.0
+
+    cache_key = f"{project_slug}:5h:{int(reset_epoch)}"
+    cache = _load_cache()
+    now = time.time()
+    entry = cache.get(cache_key)
+    if isinstance(entry, dict) and (now - entry.get("cached_at", 0)) < CACHE_TTL_SECONDS:
+        return entry.get("runway"), entry.get("worked", 0.0)
+
+    reset_floor = reset_epoch - FIVE_HOUR_SECONDS
+    events_since_reset = list(_iter_event_timestamps(project_slug, reset_floor))
+
+    recent_floor = max(reset_floor, now - THIRTY_MIN_SECONDS)
+    events_recent = sorted(t for t in events_since_reset if t >= recent_floor)
+    worked_recent = _active_hours_from_sorted(events_recent)
+
+    if not events_since_reset or not events_recent or worked_recent < 0.05 or pct_used <= 0:
+        runway = None
+    elif pct_used >= 100:
+        runway = 0.0
+    else:
+        density_ratio = len(events_recent) / len(events_since_reset)
+        pct_recent = pct_used * density_ratio
+        burn_rate = pct_recent / worked_recent  # % per active hour, short-horizon avg
+        runway = (100.0 - pct_used) / burn_rate if burn_rate > 0 else None
+
+    cache[cache_key] = {"runway": runway, "worked": worked_recent, "cached_at": now}
+    _save_cache(cache)
+    return runway, worked_recent
 
 
 def format_chip(runway, colour=True):

@@ -23,16 +23,26 @@
 #
 # Modifiers:
 #   ⚠ NNKB err            — appended when any cached tool_result error >2KB
-#   ⚠ NN%·5h→HH:MM        — 5h burst cap 75–89% used; reset time appended
-#   🚨 NN%·5h→HH:MM        — 5h burst cap ≥90% used; reset time appended
-#   ⚠ NN%·wk→Day HH:MM    — 7-day cap 60–84% used; reset time appended
-#   🚨 NN%·wk→Day HH:MM    — 7-day cap ≥85% used; reset time appended
+#   ⚠ NN%·5h→HH:MM        — 5h burst cap, projection unsafe, pct < 90%; reset time appended
+#   🚨 NN%·5h→HH:MM        — 5h burst cap, projection unsafe, pct ≥ 90%; reset time appended
+#   ⚠ NN%·wk→Day HH:MM    — 7-day cap, projection unsafe, pct < 85%; reset time appended
+#   🚨 NN%·wk→Day HH:MM    — 7-day cap, projection unsafe, pct ≥ 85%; reset time appended
 #   🕐 Xh @ avg           — weekly runway in active Claude-hours at average burn;
 #                           integer ≥10h, 0.5-h steps below; neutral ≥10h · yellow <10h
 #                           · red <3h; gated on wk chip.
 #
+# Projection gate (replaces the pure-% trigger used in earlier versions):
+# Each cap chip is suppressed when its runway (remaining active hours in budget
+# at current burn rate) exceeds wall-clock hours until reset × 1.2 (20%
+# headroom). When the projection says you won't make it, the chip fires — even
+# below the old 75%/60% thresholds. When the projection says you will make it,
+# the chip disappears — even above them. Falls back to the pre-projection
+# pure-% trigger when runway is undefined (too little activity data yet).
+# 5h burn rate is averaged over a short rolling window (compute_5h_runway);
+# wk burn rate is the since-reset average (compute_runway).
+#
 # Reset times come from rate_limits.{five_hour,seven_day}.resets_at (unix seconds, local TZ).
-# Rate-limit segments hidden below thresholds. Silent on failure.
+# Silent on failure.
 #
 # Requires: bash, python3 (3.8+), and ~/.claude/hooks/forecast_gap.py alongside this script.
 
@@ -190,31 +200,75 @@ def fmt_reset_long(ts):
         return ""
     return time.strftime("%a %H:%M", time.localtime(ts))
 
-cap_segments = []
-if pct_5h is not None:
-    rs = fmt_reset_short(rst_5h)
-    suffix = f"→{rs}" if rs else ""
-    if pct_5h >= 90:
-        cap_segments.append(f"🚨 {int(pct_5h)}%·5h{suffix}")
-    elif pct_5h >= 75:
-        cap_segments.append(f"⚠ {int(pct_5h)}%·5h{suffix}")
-if pct_wk is not None:
-    rs = fmt_reset_long(rst_wk)
-    suffix = f"→{rs}" if rs else ""
-    if pct_wk >= 85:
-        cap_segments.append(f"🚨 {int(pct_wk)}%·wk{suffix}")
-    elif pct_wk >= 60:
-        cap_segments.append(f"⚠ {int(pct_wk)}%·wk{suffix}")
+HEADROOM = 1.2  # 20% buffer — chip suppressed when runway > wall_time × HEADROOM
+FALLBACK_5H_PCT = 75.0  # used only when runway is undefined (insufficient data)
+FALLBACK_WK_PCT = 60.0
 
-# Runway chip — gated on the wk chip being shown.
-if pct_wk is not None and pct_wk >= 60 and rst_wk:
+now_ts = time.time()
+
+forecast_gap = None
+slug = os.path.basename(os.path.dirname(path))
+try:
+    import sys as _fg_sys
+    _fg_sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
+    import forecast_gap  # noqa: F811
+except Exception:
+    forecast_gap = None
+
+def projection_unsafe(runway, wall_hours, fallback_pct, pct_used):
+    """Return True if the cap chip should fire.
+
+    runway > wall × HEADROOM → safe (suppress).
+    runway undefined → fall back to the old pure-% gate.
+    """
+    if runway is None:
+        return pct_used >= fallback_pct
+    if wall_hours is None or wall_hours <= 0:
+        return pct_used >= fallback_pct
+    return runway <= wall_hours * HEADROOM
+
+cap_segments = []
+
+runway_5h = None
+if pct_5h is not None and forecast_gap is not None and rst_5h:
     try:
-        import sys as _fg_sys
-        _fg_sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
-        import forecast_gap
-        slug = os.path.basename(os.path.dirname(path))
-        runway, _worked = forecast_gap.compute_runway(slug, pct_wk, rst_wk)
-        chip = forecast_gap.format_chip(runway)
+        runway_5h, _ = forecast_gap.compute_5h_runway(slug, pct_5h, rst_5h)
+    except Exception:
+        runway_5h = None
+
+if pct_5h is not None:
+    wall_5h = ((rst_5h - now_ts) / 3600.0) if rst_5h else None
+    if projection_unsafe(runway_5h, wall_5h, FALLBACK_5H_PCT, pct_5h):
+        rs = fmt_reset_short(rst_5h)
+        suffix = f"→{rs}" if rs else ""
+        if pct_5h >= 90:
+            cap_segments.append(f"🚨 {int(pct_5h)}%·5h{suffix}")
+        else:
+            cap_segments.append(f"⚠ {int(pct_5h)}%·5h{suffix}")
+
+runway_wk = None
+if pct_wk is not None and forecast_gap is not None and rst_wk:
+    try:
+        runway_wk, _ = forecast_gap.compute_runway(slug, pct_wk, rst_wk)
+    except Exception:
+        runway_wk = None
+
+wk_shown = False
+if pct_wk is not None:
+    wall_wk = ((rst_wk - now_ts) / 3600.0) if rst_wk else None
+    if projection_unsafe(runway_wk, wall_wk, FALLBACK_WK_PCT, pct_wk):
+        rs = fmt_reset_long(rst_wk)
+        suffix = f"→{rs}" if rs else ""
+        if pct_wk >= 85:
+            cap_segments.append(f"🚨 {int(pct_wk)}%·wk{suffix}")
+        else:
+            cap_segments.append(f"⚠ {int(pct_wk)}%·wk{suffix}")
+        wk_shown = True
+
+# Runway chip — gated on the wk cap chip being shown.
+if wk_shown and forecast_gap is not None and runway_wk is not None:
+    try:
+        chip = forecast_gap.format_chip(runway_wk)
         if chip:
             cap_segments.append(chip)
     except Exception:
