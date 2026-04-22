@@ -1,0 +1,8 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "## Latest page snapshot\nuid=1_0 RootWebArea \"Example Domain\" url=\"https://example.com/\"\n  uid=1_1 heading \"Example Domain\" level=\"1\"\n  uid=1_2 StaticText \"This domain is for use in documentation examples without needing permission. Avoid use in operations.\"\n  uid=1_3 link \"Learn more\" url=\"https://iana.org/domains/example\"\n    uid=1_4 StaticText \"Learn more\"\n"
+    }
+  ]
+}

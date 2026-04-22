@@ -1,0 +1,8 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "## Network requests\nShowing 1-2 of 2 (Page 1 of 1).\nreqid=1 GET https://example.com/ [200]\nreqid=2 GET https://example.com/favicon.ico [404]"
+    }
+  ]
+}
