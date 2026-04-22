@@ -42,9 +42,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 from urllib.parse import urlsplit
+from importlib.metadata import version as _pkg_version, PackageNotFoundError
 
 try:
-    import mcp as _mcp_pkg
+    import mcp as _mcp_pkg  # noqa: F401  (kept for future probes; version read via metadata)
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 except ImportError as e:
@@ -53,6 +54,16 @@ except ImportError as e:
         f"ImportError: {e}\n"
     )
     sys.exit(2)
+
+
+def _installed_mcp_version() -> str:
+    """Read the mcp package version via importlib.metadata. The mcp package
+    does not expose __version__ as a module attribute (1.27.0). Returns "?"
+    when the metadata cannot be read."""
+    try:
+        return _pkg_version("mcp")
+    except PackageNotFoundError:
+        return "?"
 
 # ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -63,13 +74,14 @@ MCP_LAUNCH_CMD = ["npx", "-y", f"{MCP_PACKAGE}@latest"]
 # surface. Anya #7 (security-review log 2026-04-21): supply-chain posture
 # requires explicit version pin + hash verification + no auto-upgrade.
 MCP_SDK_VERSION = "1.27.0"
-if getattr(_mcp_pkg, "__version__", MCP_SDK_VERSION) != MCP_SDK_VERSION:
+_installed_sdk_at_import = _installed_mcp_version()
+if _installed_sdk_at_import != MCP_SDK_VERSION:
     # Soft fail at startup — the hash-pinned install.sh is authoritative;
     # this check exists so a dev who pip-installs from an unpinned source
     # sees the mismatch immediately, not inside a review gate.
     sys.stderr.write(
         f"WARNING: mcp SDK version drift "
-        f"(installed {getattr(_mcp_pkg, '__version__', '?')}, expected {MCP_SDK_VERSION}). "
+        f"(installed {_installed_sdk_at_import}, expected {MCP_SDK_VERSION}). "
         f"Re-run install.sh to restore hash-pinned version.\n"
     )
 
@@ -1061,7 +1073,7 @@ def check_install() -> int:
     AND the mcp Python SDK is at the pinned version.
     Returns 0 on success, 1 on failure. Prints one-line status.
     """
-    installed_sdk = getattr(_mcp_pkg, "__version__", "?")
+    installed_sdk = _installed_mcp_version()
     if installed_sdk != MCP_SDK_VERSION:
         print(
             f"FAIL: mcp SDK version drift (installed {installed_sdk}, "
