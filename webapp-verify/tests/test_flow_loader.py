@@ -288,6 +288,77 @@ class TestFlowLoader(unittest.TestCase):
             load_flow(p)
         self.assertIn("restricted", str(ctx.exception))
 
+    # ─── Abbreviated / alternative IPv4 SSRF bypass (Anya #5a, 2026-04-22) ──
+    # Python's strict `ipaddress.ip_address()` rejects these forms; Chrome's
+    # WHATWG URL parser normalises every one of them to 127.0.0.1 and loads
+    # the page. `_canonicalise_ip_host()` closes the gap via socket.inet_aton.
+
+    def test_38_ipv4_shortened_dot_form_refused(self):
+        p = write_flow(self.tmpdir, self._with_navigate_url("http://127.1/admin"))
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("restricted", str(ctx.exception))
+
+    def test_39_ipv4_decimal_form_refused(self):
+        # 2130706433 == 0x7f000001 == 127.0.0.1
+        p = write_flow(self.tmpdir, self._with_navigate_url("http://2130706433/"))
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("restricted", str(ctx.exception))
+
+    def test_40_ipv4_hex_form_refused(self):
+        p = write_flow(self.tmpdir, self._with_navigate_url("http://0x7f000001/"))
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("restricted", str(ctx.exception))
+
+    def test_41_ipv4_octal_form_refused(self):
+        p = write_flow(self.tmpdir, self._with_navigate_url("http://0177.0.0.1/"))
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("restricted", str(ctx.exception))
+
+    def test_42_ipv6_mapped_ipv4_loopback_refused(self):
+        # ::ffff:127.0.0.1 is the IPv4-mapped IPv6 form of loopback.
+        p = write_flow(self.tmpdir, self._with_navigate_url("http://[::ffff:127.0.0.1]/"))
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("restricted", str(ctx.exception))
+
+    def test_43_dns_name_starting_with_digit_ok(self):
+        # `1password.com` starts with a digit but is a legitimate DNS name;
+        # the canonicaliser's regex prevents false-positive IP parsing.
+        p = write_flow(self.tmpdir, self._with_navigate_url("https://1password.com/"))
+        flow = load_flow(p)
+        self.assertEqual(flow["steps"][0]["tool"], "navigate_page")
+
+    def test_44_dns_name_pure_hex_letters_ok(self):
+        # `abc.def.com` contains only chars in `[0-9a-fA-FxX.]` but is a
+        # legitimate DNS name; inet_aton correctly rejects it.
+        p = write_flow(self.tmpdir, self._with_navigate_url("https://abc.def.com/"))
+        flow = load_flow(p)
+        self.assertEqual(flow["steps"][0]["tool"], "navigate_page")
+
+    # ─── Well-known loopback hostnames (Anya #5c, 2026-04-22) ───────────────
+    # `_canonicalise_ip_host` correctly returns None for DNS names (no
+    # resolution in a static gate), but `localhost` / `ip6-localhost` /
+    # `ip6-loopback` / `broadcasthost` are universally mapped to loopback via
+    # /etc/hosts. The hostname denylist, not the IP canonicaliser, is the
+    # right gate for this class.
+
+    def test_54_localhost_refused(self):
+        p = write_flow(self.tmpdir, self._with_navigate_url("http://localhost/admin"))
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("refused", str(ctx.exception))
+        self.assertIn("localhost", str(ctx.exception))
+
+    def test_55_ip6_localhost_refused(self):
+        p = write_flow(self.tmpdir, self._with_navigate_url("http://ip6-localhost/"))
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("refused", str(ctx.exception))
+
     # ─── Entropy scanner (Anya #10, 2026-04-21) ─────────────────────────────
 
     def test_33_high_entropy_in_goal_refused(self):
@@ -332,6 +403,127 @@ class TestFlowLoader(unittest.TestCase):
         p = write_flow(self.tmpdir, data)
         flow = load_flow(p)
         self.assertEqual(flow["steps"][0]["tool"], "navigate_page")
+
+    # ─── Canonical token-shape library (Anya #10a, 2026-04-22) ──────────────
+    # Entropy alone only catches random-base64 (5.36 bits/char). Real-world
+    # token formats sit below the 4.5 threshold: MD5 hex 3.48, SHA-256 3.81,
+    # AWS 3.68, GitHub PAT 4.14, JWT 4.36. TOKEN_SHAPE_PATTERNS closes the
+    # gap.
+
+    def test_45_aws_access_key_refused(self):
+        data = self._minimal_valid()
+        data["goal"] = "Verify deploy using AKIAIOSFODNN7EXAMPLE credentials"
+        p = write_flow(self.tmpdir, data)
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("AWS access key", str(ctx.exception))
+
+    def test_46_github_pat_refused(self):
+        # GitHub PAT format: `ghp_` + exactly 36 base62 chars.
+        data = self._with_navigate_url(
+            "https://example.com/cb?t=ghp_16C7e42F292c6912E7710c838347Ae178B4a"
+        )
+        p = write_flow(self.tmpdir, data)
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("GitHub PAT", str(ctx.exception))
+
+    def test_47_jwt_refused(self):
+        data = self._minimal_valid()
+        data["goal"] = (
+            "Test SSO with "
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+            "eyJzdWIiOiIxMjM0NSJ9.abcdefghijk"
+        )
+        p = write_flow(self.tmpdir, data)
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("JWT", str(ctx.exception))
+
+    def test_48_sha256_hex_in_goal_refused(self):
+        data = self._minimal_valid()
+        data["goal"] = (
+            "Verify commit "
+            "5ce1fa81614958e267b21fb2aa34e0aea8e2c6ede60d52aba45fd47246b4d741"
+        )
+        p = write_flow(self.tmpdir, data)
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("SHA-256 hex", str(ctx.exception))
+
+    def test_49_pem_header_refused(self):
+        data = self._minimal_valid()
+        data["goal"] = (
+            "Rotate key: -----BEGIN RSA PRIVATE KEY----- MIIEowIBAAKCAQ..."
+        )
+        p = write_flow(self.tmpdir, data)
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("PEM private key", str(ctx.exception))
+
+    def test_50_anthropic_key_refused(self):
+        data = self._minimal_valid()
+        data["goal"] = "Run experiment with sk-ant-api03-abcdefghijklmnopqrst-xxx"
+        p = write_flow(self.tmpdir, data)
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("Anthropic", str(ctx.exception))
+
+    def test_51_slack_token_refused(self):
+        data = self._minimal_valid()
+        data["goal"] = "Post to channel with xoxb-1234567890-abcdefghij"
+        p = write_flow(self.tmpdir, data)
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("Slack", str(ctx.exception))
+
+    def test_52_token_shape_with_allow_flag_loads(self):
+        data = self._minimal_valid()
+        data["goal"] = "Leak test with AKIAIOSFODNN7EXAMPLE (intentional)"
+        p = write_flow(self.tmpdir, data)
+        flow = load_flow(p, allow_high_entropy=True)
+        self.assertIn("AKIA", flow["goal"])
+
+    def test_53_hex_like_lowercase_string_not_flagged(self):
+        # 32 lowercase letters that happen to all be in [a-f] would match
+        # the 32-char-hex regex. "deadbeefcafebabe..." is contrived but
+        # verifies the word-boundary guards work for natural prose mixed
+        # with shorter hex strings.
+        data = self._minimal_valid()
+        data["goal"] = "Dashboard shows deadbeef at top (not a full 32-hex run)"
+        p = write_flow(self.tmpdir, data)
+        flow = load_flow(p)
+        self.assertIn("deadbeef", flow["goal"])
+
+    # ─── Uppercase hex in token-shape regex (Anya #10b, 2026-04-22) ─────────
+    # SHA-256 / 32-char-hex regexes previously used `[0-9a-f]` only; widened
+    # to `[0-9a-fA-F]` so uppercase hex (e.g. BSD sha256sum(1) output, some
+    # Windows tooling) is detected. Boundary guards widened to the same class
+    # to preserve "no mid-hex-sequence match" semantics on both cases.
+
+    def test_56_uppercase_sha256_in_goal_refused(self):
+        data = self._minimal_valid()
+        data["goal"] = (
+            "Verify commit "
+            "5CE1FA81614958E267B21FB2AA34E0AEA8E2C6EDE60D52ABA45FD47246B4D741"
+        )
+        p = write_flow(self.tmpdir, data)
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("SHA-256 hex", str(ctx.exception))
+
+    def test_57_uppercase_32char_hex_in_url_refused(self):
+        # 32 uppercase hex chars (MD5-shaped cache-buster). Previously slipped
+        # past because the character class was [0-9a-f] only.
+        p = write_flow(
+            self.tmpdir,
+            self._with_navigate_url(
+                "https://example.com/asset?v=5CE1FA81614958E267B21FB2AA34E0AE"
+            ),
+        )
+        with self.assertRaises(FlowRefusedError) as ctx:
+            load_flow(p)
+        self.assertIn("32-char hex", str(ctx.exception))
 
 
 if __name__ == "__main__":

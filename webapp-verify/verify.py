@@ -33,6 +33,7 @@ import math
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -159,13 +160,59 @@ BLOCKED_HOSTNAMES: frozenset[str] = frozenset({
     "metadata.google.internal",
     "metadata",
     "instance-data",
+    # Anya #5c, 2026-04-22: well-known loopback DNS names. `_canonicalise_ip_host`
+    # correctly returns None for DNS (no resolution in a static gate), but these
+    # names are universally mapped to loopback via /etc/hosts. Hostname denylist,
+    # not IP canonicaliser, is the right gate for this class.
+    "localhost",
+    "ip6-localhost",
+    "ip6-loopback",
+    "broadcasthost",
 })
 
 # Entropy scanner (Anya #10, 2026-04-21). Bench: natural-language sentences
-# sit near 3.5 bits/char; base64 and hex tokens climb past 4.5. Threshold
+# sit near 3.5 bits/char; random base64 tokens climb past 5.0. Threshold
 # tuned per #495 close-out.
+#
+# Anya #10a, 2026-04-22: entropy alone misses most real token shapes — MD5
+# hex at 3.48, SHA-256 hex at 3.81, AWS keys at 3.68, JWTs at 4.36, GitHub
+# PATs at 4.14 all slip past a 4.5 threshold because hex and most
+# base64url-ish alphabets don't climb that high. Keep entropy as one signal
+# for random-ish base64, add TOKEN_SHAPE_PATTERNS below as the complement.
 HIGH_ENTROPY_THRESHOLD = 4.5
 MIN_HIGH_ENTROPY_LEN = 20
+
+# Canonical token shapes — if any flow string matches any of these patterns,
+# refuse the flow unless --allow-high-entropy is passed. Closes the gap
+# between Shannon entropy (which only trips on random base64) and real-world
+# secret formats.
+TOKEN_SHAPE_PATTERNS: dict[str, re.Pattern] = {
+    "AWS access key":       re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    "AWS session key":      re.compile(r"\bASIA[0-9A-Z]{16}\b"),
+    "GitHub PAT":           re.compile(r"\bghp_[A-Za-z0-9]{36}\b"),
+    "GitHub OAuth":         re.compile(r"\bgho_[A-Za-z0-9]{36}\b"),
+    "GitHub fine-grained":  re.compile(r"\bgithub_pat_[A-Za-z0-9_]{82}\b"),
+    "Anthropic API key":    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b"),
+    "OpenAI API key":       re.compile(r"\bsk-[A-Za-z0-9]{32,}\b"),
+    "JWT":                  re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\."),
+    # Anya #10b, 2026-04-22: hex classes widened to [0-9a-fA-F]. Lowercase-only
+    # missed uppercase SHA-256 / 32-char hex (e.g. sha256sum(1) output on BSD).
+    # Boundary guards widened to same class to keep "no mid-hex-sequence match"
+    # semantics case-consistent on both sides.
+    "SHA-256 hex":          re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])"),
+    "32-char hex":          re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{32}(?![0-9a-fA-F])"),
+    "PEM private key":      re.compile(r"-----BEGIN[ A-Z]*PRIVATE KEY-----"),
+    "Slack token":          re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
+    "Google OAuth":         re.compile(r"\bya29\.[A-Za-z0-9_-]{20,}\b"),
+}
+
+# Subprocess env whitelist (Anya #11, 2026-04-22). The previous implementation
+# passed `env={**os.environ, …}` to the chrome-devtools-mcp Node subprocess,
+# handing over the entire caller environment — any ANTHROPIC_API_KEY,
+# GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, NOTION_TOKEN, etc. A process that's
+# out of our trust boundary (Node + npm telemetry + Chrome crash reports)
+# now sees only what it needs. Add keys here only with a documented reason.
+_SUBPROCESS_ENV_KEYS = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "USER")
 
 # Substrate-audit gates (Anya #3, 2026-04-21). Audit mode writes network
 # captures + console dumps + snapshots to disk — PII-adjacent by construction.
@@ -217,20 +264,42 @@ def _is_high_entropy(s: str) -> bool:
     return len(s) >= MIN_HIGH_ENTROPY_LEN and _shannon_entropy(s) >= HIGH_ENTROPY_THRESHOLD
 
 
+def _matches_token_shape(s: str) -> str | None:
+    """Return the name of the first TOKEN_SHAPE_PATTERNS rule that matches a
+    substring of `s`, or None. Closes the #10a gap where entropy alone misses
+    AWS keys, GitHub PATs, JWTs, hex tokens, PEM headers, etc.
+    """
+    for name, pattern in TOKEN_SHAPE_PATTERNS.items():
+        if pattern.search(s):
+            return name
+    return None
+
+
 def _scan_flow_entropy(flow: dict, allow_high_entropy: bool) -> None:
     """Walk all string leaves in the flow object. Raise FlowRefusedError on
-    the first high-entropy string unless the caller explicitly opted in.
+    the first leaf that either (a) has high Shannon entropy or (b) matches a
+    canonical token-shape regex. Caller opts out with --allow-high-entropy.
 
-    Rationale (Anya #10): flow scripts are copied to artefacts/<run>/flow.json
-    on every run. A dev who hard-codes a session token in a goal string or a
-    URL puts it on disk and in git. Scanner is advisory — --allow-high-entropy
-    bypasses it with an explicit signal.
+    Rationale (Anya #10 + #10a): flow scripts are copied to
+    artefacts/<run>/flow.json on every run. A dev who hard-codes a session
+    token in a goal string or a URL puts it on disk and in git. Entropy
+    catches random base64; the regex library catches every canonical token
+    format that sits below the entropy threshold (MD5, SHA-256, AWS, GitHub,
+    JWT, PEM, Slack, Google OAuth).
     """
     if allow_high_entropy:
         return
 
     def _walk(node, path: str) -> None:
         if isinstance(node, str):
+            token_kind = _matches_token_shape(node)
+            if token_kind is not None:
+                raise FlowRefusedError(
+                    f"flow field '{path}' matches a canonical token shape "
+                    f"({token_kind}). Looks like a secret. If intentional, "
+                    f"pass --allow-high-entropy; otherwise move the value to "
+                    f"an env var."
+                )
             if _is_high_entropy(node):
                 raise FlowRefusedError(
                     f"flow field '{path}' contains a high-entropy string "
@@ -291,24 +360,65 @@ def _validate_step_url(step_index: int, url: str) -> None:
     if host in BLOCKED_HOSTNAMES:
         raise FlowRefusedError(
             f"step[{step_index}] navigate_page host '{host}' is refused "
-            f"(cloud-metadata endpoint)"
+            f"(cloud-metadata or loopback endpoint)"
         )
 
-    # Host-by-IP smuggling check. If the host literally is an IP address and
-    # it's private/loopback/link-local, refuse.
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        # Not an IP literal. Name-based hosts don't get DNS-resolved here —
-        # that would be a side-channel in a static gate. Accept and let the
-        # runtime MCP call surface any network error.
+    ip = _canonicalise_ip_host(host)
+    if ip is None:
+        # Not an IP literal in any parseable form. Name-based hosts don't get
+        # DNS-resolved here — that would be a side-channel in a static gate.
+        # Accept and let the runtime MCP call surface any network error.
         return
 
     if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
         raise FlowRefusedError(
-            f"step[{step_index}] navigate_page IP '{host}' is in a restricted range "
-            f"(private/loopback/link-local/reserved)"
+            f"step[{step_index}] navigate_page IP '{host}' (canonical {ip}) "
+            f"is in a restricted range (private/loopback/link-local/reserved)"
         )
+
+
+def _canonicalise_ip_host(host: str):
+    """Return an ipaddress.IPv4Address / IPv6Address for any IP-shaped host,
+    including the shortened / decimal / hex / octal forms that Python's strict
+    `ipaddress.ip_address()` rejects but WHATWG URL (the browser) normalises.
+
+    Anya #5a, 2026-04-22: without this, `http://127.1/`, `http://2130706433/`,
+    `http://0x7f000001/`, `http://0177.0.0.1/` all slip past the strict parser
+    and Chrome resolves them to 127.0.0.1. `socket.inet_aton()` accepts the
+    legacy shortened forms and returns the 4-byte canonical representation;
+    re-parsing that through `ipaddress` gives us the is_private / is_loopback
+    predicates on the canonical form.
+
+    Returns None if the host is not IP-shaped (a DNS name).
+    """
+    # Strict parse first — canonical dotted-quad and IPv6 text forms.
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+
+    # IPv4 lenient parse. inet_aton accepts 127.1, 2130706433, 0x7f000001,
+    # 0177.0.0.1 and similar legacy forms. Only attempt if the host looks
+    # numeric-ish (digits, hex markers, dots) — avoids inet_aton accepting
+    # strings like "0" (valid — becomes 0.0.0.0) when the host is clearly
+    # a DNS name starting with a digit like "1password.com".
+    if re.fullmatch(r"[0-9a-fA-FxX.]+", host):
+        try:
+            packed = socket.inet_aton(host)
+            return ipaddress.IPv4Address(socket.inet_ntoa(packed))
+        except OSError:
+            pass
+
+    # IPv6 lenient parse — inet_pton accepts the bracket-stripped form
+    # including IPv4-mapped addresses like ::ffff:127.0.0.1.
+    if ":" in host:
+        try:
+            packed = socket.inet_pton(socket.AF_INET6, host)
+            return ipaddress.IPv6Address(packed)
+        except OSError:
+            pass
+
+    return None
 
 
 # ─── Flow-script loader (refuse-to-run gate, Katarina #464) ─────────────────
@@ -436,12 +546,24 @@ async def _mcp_session(extra_args: list[str] | None = None) -> AsyncIterator[Cli
     params = StdioServerParameters(
         command=cmd[0],
         args=cmd[1:],
-        env={**os.environ, "CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS": "1"},
+        env=_build_subprocess_env(),
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             yield session
+
+
+def _build_subprocess_env() -> dict[str, str]:
+    """Whitelist-only env for the chrome-devtools-mcp subprocess (Anya #11,
+    2026-04-22). The Node/npx/Chrome process is out of our trust boundary;
+    passing the full caller environment would leak ANTHROPIC_API_KEY,
+    GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, etc. to npm telemetry / Chrome
+    crash reports / any error path that serialises `process.env`.
+    """
+    env = {k: os.environ[k] for k in _SUBPROCESS_ENV_KEYS if k in os.environ}
+    env["CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS"] = "1"
+    return env
 
 
 # ─── Single-step dispatcher (async) ─────────────────────────────────────────
@@ -680,6 +802,16 @@ def run_audit_mode(
             "Audit mode writes snapshot/network/console JSON to disk; "
             "PII, tokens, and secrets on the target URL land on disk."
         )
+
+    # Anya #3a, 2026-04-22: audit-mode skips load_flow, so the SSRF gate
+    # that normally fires per-navigate_page step has to be applied here too.
+    # Without this, `--audit-mode file:///etc/passwd --confirm-substrate-audit`
+    # → `y` would ship /etc/passwd to disk. Run before the stdin prompt so
+    # bad URLs fail fast, not after the user has already typed `y`.
+    try:
+        _validate_step_url(-1, url)
+    except FlowRefusedError as e:
+        raise AuditRefusedError(f"audit URL refused: {e}") from e
 
     if not non_interactive:
         sys.stderr.write(

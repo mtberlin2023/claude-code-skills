@@ -1,187 +1,151 @@
-# Token Optimizer
+# token-optimizer
 
-**Reduce your Claude Code token usage by 40-70%** through smarter file reading, parallel tool calls, session health monitoring, and automatic model routing.
+> Stop your Claude Code Max plan from being eaten alive by long-lived sessions, bloated `CLAUDE.md` files, and bug spirals you didn't notice.
 
-## Why This Exists
+A drop-in skill for [Claude Code](https://claude.ai/claude-code) that audits your own session logs, ranks your worst sessions ("whales"), and adds the lifecycle rules + behavioural nudges that make heavy multi-project usage actually affordable on a Max plan.
 
-Every message you send in Claude Code includes your entire conversation history. The longer your session, the more tokens each message costs — a response at turn 100 can cost **10-30x** what it cost at turn 5.
+Companion to the white paper *["Self-Discovered Token Efficiency: One Heavy User's 30-Day Audit of Claude Code"](https://github.com/mtberlin2023/claude-code-skills/blob/main/token-optimizer/PAPER.md)* — read that for the why; this is the how.
 
-Most users don't realize this. They run marathon sessions, re-read files they've already seen, get verbose responses full of filler, and wonder why they're burning through their plan limits.
+---
 
-This skill fixes that with three layers:
+## TL;DR — what it does
 
-1. **Rules** — instructions in CLAUDE.md that change how Claude reads files, writes responses, and plans work
-2. **Session monitor** — a hook that counts your turns and warns you before sessions get wasteful
-3. **Model router** — a hook that suggests cheaper/faster models for simple tasks
+| You get | Why it matters |
+|---|---|
+| **`/audit`** slash command | One command shows your top 3 whale sessions, your upset %, your cache-read-to-output ratio, and your projected savings if you cut the whales. Works on your existing logs — no setup. |
+| **`/log`** slash command | Writes a HANDOVER.md at the close of any session so you can safely restart the next one fresh, without losing context. |
+| **CLAUDE.md fragment** | A copy-pasteable block of rules — Session Lifespan Cap, Bash Discipline, Behavioural Nudge, Response Numbering checkpoints — that enforce the recommendations from the paper inside Claude Code itself. |
+| **`audit.py`** script | The 50-line Python analyser. Runs against `~/.claude/projects/*.jsonl`. No dependencies. |
+| **Vital signs hook** *(optional)* | A pre-prompt hook that surfaces upset % and bash error rate at the `[20]` and `[30]` response checkpoints, so you see a session degrading in real time instead of after the fact. |
 
-## What It Does
+If you only do one thing: run `python3 audit.py` against your own logs, look at your top three sessions, and see for yourself whether the white paper applies to you.
 
-### For Beginners (Free/Pro Plan Users)
+---
 
-If you're hitting your usage limits too fast, this skill helps by:
-
-- **Stopping Claude from reading entire files** when it only needs 10 lines
-- **Making responses shorter** — no more "Sure! Let me help you with that. First, I'll..."
-- **Warning you when sessions get long** — so you can start fresh instead of wasting tokens
-- **Suggesting faster mode** for simple tasks like checking files or running commands
-
-### For Power Users
-
-The full optimization stack:
-
-| Optimization | What It Does | Token Savings |
-|-------------|--------------|---------------|
-| Surgical reads | Uses `offset`/`limit` on files >100 lines | ~30-50% on file reads |
-| Grep before read | Finds the exact line range first, reads only that | ~40-60% on searches |
-| Parallel tool calls | Batches independent operations into one message | ~20-30% on multi-step tasks |
-| Minimal diffs | Smallest unique `old_string` in edits | ~10-20% on edits |
-| No re-reads | Never reads a file already in context | ~15-25% on repeated access |
-| Haiku subagents | Routes simple searches to a faster, cheaper model | ~60-80% on lookups |
-| Response compression | No preamble, no restating, no trailing summaries | ~20-40% on responses |
-| Session health hooks | Warns at 50/100/200 turns with escalating urgency | Prevents 10-30x cost blowup |
-| Model routing hooks | Suggests `/fast` mode for routine tasks | ~30-50% on simple sessions |
-| Memory hygiene | Prevents saving redundant info that bloats context | ~10-20% on context size |
-
-## Installation
-
-### Quick Install (Recommended)
+## Install
 
 ```bash
+# Clone the repo
 git clone https://github.com/mtberlin2023/claude-code-skills.git
 cd claude-code-skills/token-optimizer
+
+# Run the install script
 bash install.sh
 ```
 
-The install script will:
-1. Copy hook scripts to `~/.claude/hooks/`
-2. Register hooks in `~/.claude/settings.json` (preserving existing settings)
-3. Show you the CLAUDE.md rules to add
+The installer:
 
-### Manual Install
+1. Copies `audit.py` and the slash-command definitions to `~/.claude/`.
+2. Appends the CLAUDE.md fragment to your `~/.claude/CLAUDE.md` (with a backup of the original first).
+3. Optionally installs the vital-signs hook.
+4. Tells you what it did and what to verify.
 
-If you prefer to do it yourself:
+You can also do all of this manually — every file in this directory is plain text and the README explains what each one is for.
 
-#### Step 1: Add the hooks
+---
 
-Copy the two hook scripts:
+## Manual install (if you don't want to run a bash script)
 
-```bash
-mkdir -p ~/.claude/hooks
-cp hooks/session-monitor.sh ~/.claude/hooks/
-cp hooks/model-advisor.sh ~/.claude/hooks/
-chmod +x ~/.claude/hooks/session-monitor.sh
-chmod +x ~/.claude/hooks/model-advisor.sh
+1. **Audit script.** Copy `audit.py` to `~/.claude/scripts/audit.py` (or anywhere on your `$PATH`). Run it with `python3 ~/.claude/scripts/audit.py`. It needs nothing other than Python 3.
+2. **CLAUDE.md rules.** Open `CLAUDE.md` in this directory. Append the contents to your own `~/.claude/CLAUDE.md`. Read it first — most of it is rules about session lifecycle, bash discipline, and the behavioural nudge format.
+3. **Slash commands.** Copy `commands/audit.md` and `commands/log.md` to `~/.claude/commands/`. Claude Code will pick them up automatically and they'll appear as `/audit` and `/log`.
+4. **Hook (optional).** Copy `hooks/vital-signs.sh` to `~/.claude/hooks/` and register it in your `~/.claude/settings.json` as a `PreToolUse` or `UserPromptSubmit` hook. See the file for the exact `settings.json` snippet.
+
+---
+
+## What the audit shows you
+
+Running `python3 audit.py` on a real heavy-user installation produces something like this:
+
+```
+Token Optimizer — Audit
+========================
+Scanned: ~/.claude/projects/  (12 project folders, 301 sessions)
+Window:  2026-03-10 → 2026-04-09  (30 days)
+
+Aggregate
+---------
+Sessions:                    301
+User→assistant turns:     34,275
+Output tokens:               8.8 M
+Cache reads:                 7.35 B   ← cost driver
+Uncached input:              0.8 M
+Active Claude time:          148 h
+Avg turns / session:         114
+Median turn time:            51 s
+
+Top whales (by cache reads)
+---------------------------
+  1. qrshareme         1,884 turns   140 h wall   8.6 h active   94% idle
+  2. fiction-writer    1,449 turns    44 h wall   7.1 h active   84% idle
+  3. supermark-deep      650 turns   128 h wall   2.0 h active   98% idle
+
+Top 2 sessions = 34% of the entire month's cache reads.
+
+Vital signs (worst 10 sessions)
+-------------------------------
+  Avg upset %:        16%   (>20% is bug-spiral territory)
+  Avg bash error %:   22%   (>30% is a tooling fight)
+
+Estimated savings if all top-10 whales were split into 100-turn sessions:
+  ~52% reduction in cache reads
+  ~36% reduction in equivalent API cost
+
+Reading these results: see the companion white paper, sections 4–8.
 ```
 
-#### Step 2: Register hooks in settings.json
+The point of running this is *not* to feel bad about your numbers. It's to find the two or three sessions in your own data that are quietly draining your plan, so you can target the fix at them specifically. Most of the savings in heavy-user workloads come from the long tail, not from the average session.
 
-Add this to your `~/.claude/settings.json` (create the file if it doesn't exist):
+---
 
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/session-monitor.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/model-advisor.sh",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
-}
+## What's inside
+
+```
+token-optimizer/
+├── README.md              ← you are here
+├── PAPER.md               ← the companion white paper (in full)
+├── install.sh             ← one-shot installer
+├── audit.py               ← the 50-line analyser
+├── CLAUDE.md              ← rules fragment to merge into your global CLAUDE.md
+├── commands/
+│   ├── audit.md           ← /audit slash command definition
+│   └── log.md             ← /log slash command definition
+└── hooks/
+    └── vital-signs.sh     ← optional pre-turn vital-signs check
 ```
 
-> **Note:** If you already have a `settings.json`, merge the hooks array — don't overwrite the file.
+---
 
-#### Step 3: Add rules to CLAUDE.md
+## What it does NOT do
 
-Copy the contents of [`CLAUDE.md.example`](./CLAUDE.md.example) into your global `~/.claude/CLAUDE.md` or your project's `CLAUDE.md`.
+- It does not modify any of your `.jsonl` log files. The audit is read-only.
+- It does not send any data anywhere. Everything runs locally.
+- It does not change your Claude Code settings beyond appending to `~/.claude/CLAUDE.md` (with a backup) and copying files into `~/.claude/`.
+- It does not require an Anthropic API key. The audit reads your local logs. The slash commands run inside your existing Claude Code session.
+- It does not enforce the rules — Claude Code does. The skill just installs them.
 
-## How It Works
-
-### Session Monitor Hook
-
-Runs on every prompt. Counts your conversation turns by reading the session's JSONL log file, then injects warnings into Claude's context:
-
-| Turns | Level | What Happens |
-|-------|-------|-------------|
-| < 50 | OK | Nothing — session is efficient |
-| 50+ | NOTICE | Claude warns you: "We're at ~50 turns, consider wrapping up after this task" |
-| 100+ | WARNING | Claude finishes current task only, provides a handover block, recommends stopping |
-| 200+ | CRITICAL | Claude stops taking new work, provides handover, refuses to continue |
-
-### Model Router Hook
-
-Runs on every prompt. Classifies your message as simple or complex:
-
-- **Simple tasks** (file lookups, status checks, deploys): Claude uses cheaper `haiku` subagents and suggests `/fast` mode
-- **Complex tasks** (architecture, refactoring, creative work): Claude uses full `opus` reasoning
-
-### CLAUDE.md Rules
-
-The rules work without the hooks — they're instructions Claude follows regardless. The hooks add automated enforcement.
-
-## Customization
-
-### Adjusting Session Thresholds
-
-Edit `~/.claude/hooks/session-monitor.sh` and change the numbers:
-
-```bash
-# Default thresholds
-if [ "$TURNS" -ge 200 ]; then    # CRITICAL — change to your preference
-elif [ "$TURNS" -ge 100 ]; then   # WARNING
-elif [ "$TURNS" -ge 50 ]; then    # NOTICE
-```
-
-### Adjusting Model Routing
-
-Edit `~/.claude/hooks/model-advisor.sh` to change which keywords trigger simple vs. complex classification:
-
-```bash
-# Add your own "simple task" keywords
-for pattern in "url" "link" "status" "check" "show me" "deploy" ...
-
-# Add your own "complex task" keywords (these override simple)
-for pattern in "build" "create" "implement" "refactor" "design" ...
-```
-
-### One Topic Per Session
-
-We recommend keeping each Claude Code session focused on a single project or topic. When you switch to something completely different, start a fresh session. This isn't enforced — it's a practice that keeps your context clean and your costs low.
+---
 
 ## Uninstall
 
 ```bash
-rm ~/.claude/hooks/session-monitor.sh
-rm ~/.claude/hooks/model-advisor.sh
+bash install.sh --uninstall
 ```
 
-Then remove the hooks entries from `~/.claude/settings.json` and the rules from your `CLAUDE.md`.
+This restores your original `~/.claude/CLAUDE.md` from the backup made at install time, removes the slash commands, and removes the audit script. Your `.jsonl` logs are not touched.
 
-## FAQ
+---
 
-**Q: Does this work on the free plan?**
-A: Yes. The CLAUDE.md rules work on any plan. The hooks require Claude Code CLI access.
+## Reporting back
 
-**Q: Will this break my existing setup?**
-A: No. The install script preserves your existing `settings.json`. The CLAUDE.md rules are additive.
+If you run the audit on your own logs and the numbers tell an interesting story — especially if your distribution looks very different from mine, or if a particular item from the Top 10 worked unusually well or unusually badly for you — open an issue on the repo. I'm collecting before/after data from installers as a follow-up to the white paper. Anonymous summaries are welcome; full logs are not requested or needed.
 
-**Q: How do I know it's working?**
-A: Start a long session. After ~50 turns, you'll see Claude mention session health. For model routing, ask a simple question and check if Claude mentions using haiku subagents.
-
-**Q: Can I use just the rules without the hooks?**
-A: Absolutely. The CLAUDE.md rules alone provide significant savings. The hooks add automated enforcement.
+---
 
 ## License
 
-MIT
+MIT. Use it, fork it, rip out the bits you want, ignore the bits you don't.
+
+---
+
+*Built by [@mtberlin2023](https://github.com/mtberlin2023) — companion to the white paper Self-Discovered Token Efficiency.*
