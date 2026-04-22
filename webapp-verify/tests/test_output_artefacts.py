@@ -25,12 +25,35 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from verify import (  # noqa: E402
     MAX_STDOUT_LINES,
+    _ext_for_mime,
+    _extract_binary_blobs,
+    _result_to_dict,
     emit_verdict,
     ensure_artefacts_dir,
     viewport_subdir,
     write_artefact_bytes,
     write_artefact_json,
 )
+
+
+class _FakeContentItem:
+    """Stand-in for an mcp content item — duck-typed against the real shape."""
+    def __init__(self, *, text=None, data=None, mimeType=None, item_type=None):
+        if text is not None:
+            self.text = text
+        if data is not None:
+            self.data = data
+        if mimeType is not None:
+            self.mimeType = mimeType
+        if item_type is not None:
+            self.type = item_type
+
+
+class _FakeCallToolResult:
+    """Stand-in for mcp.CallToolResult — content list + optional structuredContent."""
+    def __init__(self, content=None, structuredContent=None):
+        self.content = content or []
+        self.structuredContent = structuredContent
 
 
 class TestEmitVerdict(unittest.TestCase):
@@ -156,6 +179,119 @@ class TestArtefactWriters(unittest.TestCase):
         dest = self.root / "deep" / "nested" / "dir"
         p = write_artefact_json(dest, "x.json", {"ok": True})
         self.assertTrue(p.is_file())
+
+
+class TestBinaryBlobExtraction(unittest.TestCase):
+    """Path C #A2 fix: screenshot bytes survive the result -> writer round-trip
+    instead of being lost in _result_to_dict's blob flattening."""
+
+    def test_15_extract_blob_from_raw_bytes(self):
+        png = b"\x89PNG\r\n\x1a\nfake-screenshot-bytes"
+        result = _FakeCallToolResult(content=[
+            _FakeContentItem(data=png, mimeType="image/png"),
+        ])
+        blobs = _extract_binary_blobs(result)
+        self.assertEqual(len(blobs), 1)
+        mime, data = blobs[0]
+        self.assertEqual(mime, "image/png")
+        self.assertEqual(data, png)
+
+    def test_16_extract_blob_from_base64_string(self):
+        import base64
+        png = b"\x89PNG\r\n\x1a\nbase64-payload"
+        encoded = base64.b64encode(png).decode("ascii")
+        result = _FakeCallToolResult(content=[
+            _FakeContentItem(data=encoded, mimeType="image/png"),
+        ])
+        blobs = _extract_binary_blobs(result)
+        self.assertEqual(len(blobs), 1)
+        self.assertEqual(blobs[0][1], png)
+
+    def test_17_extract_blob_skips_text_items(self):
+        result = _FakeCallToolResult(content=[
+            _FakeContentItem(text="snapshot text"),
+            _FakeContentItem(text="more text"),
+        ])
+        self.assertEqual(_extract_binary_blobs(result), [])
+
+    def test_18_extract_blob_empty_content(self):
+        result = _FakeCallToolResult(content=[])
+        self.assertEqual(_extract_binary_blobs(result), [])
+
+    def test_19_extract_blob_default_mime_when_missing(self):
+        result = _FakeCallToolResult(content=[
+            _FakeContentItem(data=b"some-bytes"),
+        ])
+        blobs = _extract_binary_blobs(result)
+        self.assertEqual(len(blobs), 1)
+        self.assertEqual(blobs[0][0], "application/octet-stream")
+
+    def test_20_extract_blob_from_dict_returns_empty(self):
+        # Pre-flattened dicts have already lost the bytes.
+        flat = {"content": [{"type": "blob", "size": 42}]}
+        self.assertEqual(_extract_binary_blobs(flat), [])
+
+    def test_21_extract_blob_invalid_base64_skipped(self):
+        result = _FakeCallToolResult(content=[
+            _FakeContentItem(data="!!! not base64 !!!", mimeType="image/png"),
+        ])
+        # Skipped silently rather than blowing up the run.
+        self.assertEqual(_extract_binary_blobs(result), [])
+
+
+class TestExtForMime(unittest.TestCase):
+    """File extensions for the per-step screenshot writer."""
+
+    def test_22_ext_png(self):
+        self.assertEqual(_ext_for_mime("image/png"), ".png")
+
+    def test_23_ext_jpeg(self):
+        self.assertEqual(_ext_for_mime("image/jpeg"), ".jpg")
+
+    def test_24_ext_webp(self):
+        self.assertEqual(_ext_for_mime("image/webp"), ".webp")
+
+    def test_25_ext_pdf(self):
+        self.assertEqual(_ext_for_mime("application/pdf"), ".pdf")
+
+    def test_26_ext_unknown_falls_back(self):
+        self.assertEqual(_ext_for_mime("application/x-novel-format"), ".bin")
+        self.assertEqual(_ext_for_mime(""), ".bin")
+
+
+class TestResultToDictIdempotent(unittest.TestCase):
+    """_result_to_dict must accept pre-flattened dicts (refactor rename guard)."""
+
+    def test_27_dict_passes_through(self):
+        flat = {"content": [{"type": "text", "text": "hello"}]}
+        self.assertEqual(_result_to_dict(flat), flat)
+
+    def test_28_blob_summary_includes_mimetype(self):
+        png = b"\x89PNG\r\n\x1a\n"
+        result = _FakeCallToolResult(content=[
+            _FakeContentItem(data=png, mimeType="image/png"),
+        ])
+        flat = _result_to_dict(result)
+        self.assertEqual(len(flat["content"]), 1)
+        self.assertEqual(flat["content"][0]["type"], "blob")
+        self.assertEqual(flat["content"][0]["mimeType"], "image/png")
+        self.assertEqual(flat["content"][0]["size"], len(png))
+
+    def test_29_text_item_preserved(self):
+        result = _FakeCallToolResult(content=[
+            _FakeContentItem(text="snapshot text"),
+        ])
+        flat = _result_to_dict(result)
+        self.assertEqual(flat["content"][0]["type"], "text")
+        self.assertEqual(flat["content"][0]["text"], "snapshot text")
+
+    def test_30_structured_content_takes_precedence(self):
+        result = _FakeCallToolResult(
+            content=[_FakeContentItem(text="ignored")],
+            structuredContent={"verdict": "ok"},
+        )
+        flat = _result_to_dict(result)
+        self.assertEqual(flat, {"verdict": "ok"})
 
 
 if __name__ == "__main__":

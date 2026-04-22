@@ -546,13 +546,21 @@ def dispatch_emulate(
 # ─── MCP session lifecycle (async) ──────────────────────────────────────────
 
 @asynccontextmanager
-async def _mcp_session(extra_args: list[str] | None = None) -> AsyncIterator[ClientSession]:
+async def _mcp_session(
+    extra_args: list[str] | None = None,
+    errlog_path: Path | None = None,
+) -> AsyncIterator[ClientSession]:
     """Open an initialized ClientSession to the CDP MCP server over stdio.
 
     Yields an initialized ClientSession; exits clean on context teardown.
     Replaces the pre-SDK-study start_mcp_server(cmd) -> Popen stub — the
     official mcp SDK owns the subprocess lifecycle via stdio_client, so the
     caller gets the session, not the process.
+
+    If errlog_path is provided, the chrome-devtools-mcp subprocess's stderr
+    is redirected to that file (chmod 0o600) instead of leaking past the
+    wrapper's 3-line stdout cap onto the user's terminal. Server stderr
+    remains available for postmortem.
     """
     cmd = build_server_command(extra_args)
     params = StdioServerParameters(
@@ -560,10 +568,20 @@ async def _mcp_session(extra_args: list[str] | None = None) -> AsyncIterator[Cli
         args=cmd[1:],
         env=_build_subprocess_env(),
     )
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            yield session
+    if errlog_path is not None:
+        errlog_path.parent.mkdir(parents=True, exist_ok=True)
+        errlog_path.parent.chmod(0o700)
+        with errlog_path.open("a", encoding="utf-8") as errlog:
+            errlog_path.chmod(0o600)
+            async with stdio_client(params, errlog=errlog) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    yield session
+    else:
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                yield session
 
 
 def _build_subprocess_env() -> dict[str, str]:
@@ -585,12 +603,20 @@ async def dispatch_step_async(
     step: dict,
     flow: dict,
     dispatcher_log_lines: list[str],
-) -> dict:
+):
     """Route a single flow step through allowlist + deny-list + (for emulate)
     parameter gate. Dispatch via the MCP client. Deny-list hits raise before
     any MCP call.
 
-    Returns the MCP response dict (structuredContent or content list).
+    Returns the raw mcp.CallToolResult — the caller decides whether to flatten
+    via _result_to_dict (JSON-safe) and/or extract binaries via
+    _extract_binary_blobs (screenshot bytes). Returning the raw result lets
+    the runner persist BOTH the JSON view and the binary content without
+    a second MCP call.
+
+    For the `emulate` skip case (all parameters rejected), returns a plain
+    dict marker rather than a CallToolResult — caller normalises both via
+    _result_to_dict.
     """
     tool = step.get("tool")
     if not isinstance(tool, str):
@@ -613,7 +639,7 @@ async def dispatch_step_async(
             session.call_tool("emulate", accepted),
             timeout=MCP_CALL_TIMEOUT,
         )
-        return _result_to_dict(result)
+        return result
 
     if tool not in ALLOWLIST:
         raise ValueError(
@@ -646,11 +672,18 @@ async def dispatch_step_async(
         session.call_tool(tool, args),
         timeout=MCP_CALL_TIMEOUT,
     )
-    return _result_to_dict(result)
+    return result
 
 
 def _result_to_dict(result) -> dict:
-    """Flatten an mcp CallToolResult into a plain dict for artefact writing."""
+    """Flatten an mcp CallToolResult (or pre-flattened dict) into a JSON-safe
+    dict for artefact writing. Binary blob content is summarised to
+    {"type": "blob", "mimeType": ..., "size": N} — the bytes themselves are
+    NOT preserved here; the caller must use _extract_binary_blobs on the
+    raw result for that.
+    """
+    if isinstance(result, dict):
+        return result
     if hasattr(result, "structuredContent") and result.structuredContent:
         return dict(result.structuredContent)
     content = getattr(result, "content", None)
@@ -658,13 +691,58 @@ def _result_to_dict(result) -> dict:
         return {"content": []}
     out = []
     for item in content:
-        if hasattr(item, "text"):
+        if hasattr(item, "text") and getattr(item, "text", None) is not None:
             out.append({"type": "text", "text": item.text})
-        elif hasattr(item, "data"):
-            out.append({"type": "blob", "size": len(item.data or b"")})
+        elif hasattr(item, "data") and getattr(item, "data", None) is not None:
+            data = item.data
+            size = len(data) if isinstance(data, (bytes, bytearray)) else len(str(data))
+            mime = getattr(item, "mimeType", None) or "application/octet-stream"
+            out.append({"type": "blob", "mimeType": mime, "size": size})
         else:
             out.append({"type": getattr(item, "type", "unknown")})
     return {"content": out}
+
+
+def _extract_binary_blobs(result) -> list[tuple[str, bytes]]:
+    """Pull binary content (e.g. screenshots) from an MCP CallToolResult.
+    Returns a list of (mime_type, bytes) tuples — empty if no binary content
+    or if the input is a pre-flattened dict (which has lost the bytes).
+
+    Handles both raw bytes and base64-encoded strings (MCP often base64s
+    binary content in JSON responses).
+    """
+    if isinstance(result, dict):
+        return []
+    out: list[tuple[str, bytes]] = []
+    content = getattr(result, "content", None) or []
+    for item in content:
+        data = getattr(item, "data", None)
+        if data is None:
+            continue
+        mime = getattr(item, "mimeType", None) or "application/octet-stream"
+        if isinstance(data, (bytes, bytearray)):
+            out.append((mime, bytes(data)))
+            continue
+        if isinstance(data, str):
+            try:
+                import base64
+                out.append((mime, base64.b64decode(data, validate=True)))
+            except Exception:
+                continue
+    return out
+
+
+def _ext_for_mime(mime: str) -> str:
+    """Map MIME types to file extensions for binary persistence."""
+    if mime == "image/png":
+        return ".png"
+    if mime == "image/jpeg":
+        return ".jpg"
+    if mime == "image/webp":
+        return ".webp"
+    if mime == "application/pdf":
+        return ".pdf"
+    return ".bin"
 
 
 # ─── Flow runner (sync wrapper + async impl) ────────────────────────────────
@@ -679,6 +757,7 @@ def run_flow(flow: dict, run_id: str, allow_high_entropy: bool = False) -> dict:
 async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> dict:
     run_dir = ensure_artefacts_dir(run_id)
     write_artefact_json(run_dir, "flow.json", flow)
+    server_errlog = run_dir / "server-stderr.log"
 
     dispatcher_log: list[str] = []
     steps = flow["steps"]
@@ -688,21 +767,41 @@ async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> 
     final_error: str | None = None
 
     try:
-        async with _mcp_session() as session:
+        async with _mcp_session(errlog_path=server_errlog) as session:
             for i, step in enumerate(steps):
+                tool = step.get("tool")
                 try:
-                    result = await dispatch_step_async(session, step, flow, dispatcher_log)
+                    raw = await dispatch_step_async(session, step, flow, dispatcher_log)
                 except Exception as e:  # noqa: BLE001 — capture + flatten
-                    final_error = f"step[{i}] {step.get('tool')}: {type(e).__name__}: {e}"
+                    final_error = f"step[{i}] {tool}: {type(e).__name__}: {e}"
                     dispatcher_log.append(final_error)
                     break
                 steps_completed += 1
-                if step.get("tool") == "navigate_page":
+                if tool == "navigate_page":
                     last_navigated_url = step.get("url")
+
+                # Path C per-step persistence — every step's result lands on
+                # disk so the wrapper is auditable for every step, not just
+                # the final URL match. Closes the SKILL.md anti-pattern #3
+                # honesty gap (a recording goes green when 6/7 frames are
+                # missing). Step number is 1-indexed, zero-padded to 2 digits
+                # (handles flows up to 99 steps).
+                step_label = f"step-{i + 1:02d}-{tool}"
+                write_artefact_json(run_dir, f"{step_label}.json", _result_to_dict(raw))
+                # Binary content (screenshots) — _result_to_dict drops bytes
+                # by design (JSON safety). Extract from raw and write as
+                # separate files. Multi-blob results get -A / -B suffixes.
+                blobs = _extract_binary_blobs(raw)
+                for j, (mime, data) in enumerate(blobs):
+                    suffix = "" if len(blobs) == 1 else f"-{chr(ord('a') + j)}"
+                    ext = _ext_for_mime(mime)
+                    write_artefact_bytes(run_dir, f"{step_label}{suffix}{ext}", data)
 
             # After the scripted steps, capture a snapshot for success_state
             # evaluation (landmark matcher needs it; url-pattern matcher uses
-            # the last-navigated URL).
+            # the last-navigated URL). Persisted as final-snapshot.json — kept
+            # distinct from per-step snapshot files to avoid overlap with the
+            # step-NN-take_snapshot.json pattern.
             if final_error is None:
                 try:
                     snap = await asyncio.wait_for(
@@ -731,9 +830,11 @@ async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> 
                 matcher = "landmark"
                 passed = True
 
-    # Write artefacts.
+    # Write artefacts. The post-flow snapshot is named final-snapshot.json
+    # (not snapshot.json) so the per-step pattern step-NN-take_snapshot.json
+    # owns the unprefixed namespace cleanly.
     if snapshot_result is not None:
-        write_artefact_json(run_dir, "snapshot.json", snapshot_result)
+        write_artefact_json(run_dir, "final-snapshot.json", snapshot_result)
     if dispatcher_log:
         (run_dir / "dispatcher.log").write_text(
             "\n".join(dispatcher_log) + "\n", encoding="utf-8"
@@ -862,7 +963,8 @@ async def _run_audit_mode_async(url: str) -> Path:
     dump_root.chmod(0o700)
 
     for label, w, h in AUDIT_VIEWPORTS:
-        async with _mcp_session() as session:
+        viewport_errlog = dump_root / f"server-stderr-{label}.log"
+        async with _mcp_session(errlog_path=viewport_errlog) as session:
             # Apply viewport via emulate (both networkConditions + viewport
             # are in the default-allowed gate).
             await asyncio.wait_for(
