@@ -85,10 +85,16 @@ if _installed_sdk_at_import != MCP_SDK_VERSION:
         f"Re-run install.sh to restore hash-pinned version.\n"
     )
 
-# 8-tool allowlist (per D1 outcome, CDP MCP names).
+# 9-tool allowlist (per D1 outcome, CDP MCP names). `fill` added 2026-04-23
+# after first interactive-flow live exercise (fan-form POST) surfaced that
+# chrome-devtools-mcp uses uid semantics (from take_snapshot accessibility
+# tree), not CSS selectors. `fill` is the focus-less single-element equivalent
+# of `fill_form`; kept separate because single-element flows are the common
+# case and composing a 1-element `fill_form` is needlessly verbose.
 ALLOWLIST: frozenset[str] = frozenset({
     "navigate_page",
     "click",
+    "fill",
     "type_text",
     "fill_form",
     "take_snapshot",
@@ -647,15 +653,25 @@ async def dispatch_step_async(
         )
 
     # Per-tool dispatch — explicit, no generic pass-through (Anya #1).
+    # Interactive tools (click, fill, fill_form) require a uid resolved from
+    # the latest take_snapshot accessibility tree. The runner is responsible
+    # for resolving the flow-script's selector dict into a uid BEFORE calling
+    # this function — the step carries the resolved "uid" key on arrival.
     args: dict = {}
     if tool == "navigate_page":
         args = {"url": step["url"]}
     elif tool == "click":
-        args = {"selector": step["selector"]}
+        args = {"uid": step["uid"]}
+    elif tool == "fill":
+        args = {"uid": step["uid"], "value": step.get("value", "")}
     elif tool == "type_text":
-        args = {"selector": step["selector"], "text": step.get("text", "")}
+        # chrome-devtools-mcp `type_text` types into the previously-focused
+        # element — no uid on the tool itself. Chain: click uid → type_text.
+        args = {"text": step.get("text", "")}
+        if "submitKey" in step:
+            args["submitKey"] = step["submitKey"]
     elif tool == "fill_form":
-        args = {"fields": step.get("fields", {})}
+        args = {"elements": step.get("elements", [])}
     elif tool == "take_snapshot":
         args = {}
     elif tool == "list_console_messages":
@@ -745,6 +761,168 @@ def _ext_for_mime(mime: str) -> str:
     return ".bin"
 
 
+# ─── Selector → uid resolver ────────────────────────────────────────────────
+#
+# chrome-devtools-mcp's interactive tools (click, fill, fill_form) identify
+# target elements by `uid` strings (e.g. `1_80`) pulled from the most recent
+# `take_snapshot` accessibility tree. The tree's textual format is:
+#
+#     uid=X_Y <role> "<name>" [...trailing attrs]
+#
+# Flow scripts authored by humans should NOT have to parse snapshots or
+# hand-copy uids. They author with role+name tuples:
+#
+#     {"tool": "click", "selector": {"role": "button", "name": "GET MY NUMBER"}}
+#     {"tool": "fill",  "selector": {"role": "textbox", "name": "your@email.com"}, "value": "..."}
+#
+# The runner resolves selector → uid using the latest snapshot before dispatch.
+# Flow scripts may also pass a raw `uid` directly (for advanced / debugging
+# cases, or when role+name aren't unique); raw uids skip the resolver.
+
+# The accessibility tree format is `uid=X_Y <role>` followed by an OPTIONAL
+# quoted name then optional trailing attributes. Most interactive nodes (link,
+# button, textbox, option, heading) carry a quoted name; structural nodes
+# (main, navigation, combobox) may not. Match both shapes; absent name
+# resolves to empty string, and a selector with name="" matches name-less
+# rows (disambiguated by role uniqueness via the multi-match guard).
+_UID_LINE_RE = re.compile(
+    r'^\s*uid=(?P<uid>\d+_\d+)\s+(?P<role>[A-Za-z][A-Za-z0-9_]*)(?:\s+"(?P<name>(?:[^"\\]|\\.)*)")?',
+    re.MULTILINE,
+)
+
+# The RootWebArea line carries the actual current URL of the browser tab.
+# Shape: `uid=X_Y RootWebArea "<title>" url="<url>"`. Used as the source of
+# truth for the URL matcher, because `last_navigated_url` tracks only
+# explicit `navigate_page` steps — it cannot see server-side redirects
+# triggered by click / fill / fill_form (e.g. form POST → 302 redirect).
+_ROOT_URL_RE = re.compile(
+    r'^\s*uid=\d+_\d+\s+RootWebArea\s+"(?:[^"\\]|\\.)*"\s+url="(?P<url>[^"]*)"',
+    re.MULTILINE,
+)
+
+
+def _current_url_from_snapshot(snapshot_text: str) -> str | None:
+    """Extract the current browser URL from a snapshot's RootWebArea line.
+    Returns None if the snapshot is empty or has no RootWebArea (e.g. the
+    snapshot was taken before the first navigate — chrome-devtools-mcp's
+    initial blank tab has no RootWebArea).
+    """
+    if not snapshot_text:
+        return None
+    m = _ROOT_URL_RE.search(snapshot_text)
+    return m.group("url") if m else None
+
+
+def _snapshot_to_text(snapshot_result) -> str:
+    """Extract the concatenated text from a snapshot CallToolResult or its
+    flattened dict form. chrome-devtools-mcp returns the accessibility tree
+    as one or more text content items inside `content[].text`.
+    """
+    if snapshot_result is None:
+        return ""
+    if isinstance(snapshot_result, dict):
+        content = snapshot_result.get("content") or []
+        return "\n".join(
+            item.get("text", "") for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    content = getattr(snapshot_result, "content", None) or []
+    parts: list[str] = []
+    for item in content:
+        text = getattr(item, "text", None)
+        if text is not None:
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _resolve_selector_to_uid(selector, snapshot_text: str) -> str:
+    """Resolve a {role, name} selector against the accessibility tree text.
+
+    Returns the uid string (e.g. "1_80") of the FIRST line matching both role
+    AND name exactly. Raises FlowRefusedError on zero matches, on multiple
+    matches (ambiguity), or on an empty snapshot.
+
+    Ambiguity-is-a-finding: if two elements share role+name (e.g. two buttons
+    both labelled "Submit"), the flow script must disambiguate by passing the
+    raw `uid` key instead of `selector`. Silent first-match would let a UI
+    change route a click to the wrong element without notice.
+    """
+    if not isinstance(selector, dict):
+        raise FlowRefusedError(
+            f"selector must be a dict with 'role' and 'name' keys; got {type(selector).__name__}"
+        )
+    role = selector.get("role")
+    name = selector.get("name")
+    if not isinstance(role, str) or not isinstance(name, str):
+        raise FlowRefusedError(
+            f"selector requires string 'role' and 'name'; got role={role!r} name={name!r}"
+        )
+    if not snapshot_text.strip():
+        raise FlowRefusedError(
+            "no snapshot available for selector resolution; ensure a take_snapshot step "
+            "runs before any interactive step (click / fill / fill_form)"
+        )
+    # An absent quoted name in the snapshot line resolves to None via the
+    # optional capture group; normalise to "" so a selector with name=""
+    # matches name-less rows cleanly.
+    matches = [
+        m.group("uid") for m in _UID_LINE_RE.finditer(snapshot_text)
+        if m.group("role") == role and (m.group("name") or "") == name
+    ]
+    if not matches:
+        raise FlowRefusedError(
+            f"selector role={role!r} name={name!r} not found in latest snapshot; "
+            f"check the accessibility tree in the last step-NN-take_snapshot.json"
+        )
+    if len(matches) > 1:
+        raise FlowRefusedError(
+            f"selector role={role!r} name={name!r} matched {len(matches)} elements "
+            f"(uids: {matches}); disambiguate by passing a raw 'uid' key instead"
+        )
+    return matches[0]
+
+
+_INTERACTIVE_TOOLS_NEEDING_UID = frozenset({"click", "fill"})
+
+
+def _apply_selector_resolution(step: dict, snapshot_text: str) -> dict:
+    """Return a copy of `step` with selector dicts resolved to uid strings for
+    interactive tools. No-op for non-interactive tools or already-resolved
+    steps. Raises FlowRefusedError on resolution failure.
+    """
+    tool = step.get("tool")
+    if tool == "fill_form":
+        # elements: [{uid|selector, value}, ...] — resolve each element that
+        # carries a selector instead of a raw uid.
+        elements_in = step.get("elements", []) or []
+        resolved_elements = []
+        for idx, el in enumerate(elements_in):
+            if not isinstance(el, dict):
+                raise FlowRefusedError(
+                    f"fill_form elements[{idx}] must be a dict; got {type(el).__name__}"
+                )
+            if "uid" in el:
+                resolved_elements.append({"uid": el["uid"], "value": el.get("value", "")})
+                continue
+            if "selector" not in el:
+                raise FlowRefusedError(
+                    f"fill_form elements[{idx}] missing both 'uid' and 'selector'"
+                )
+            uid = _resolve_selector_to_uid(el["selector"], snapshot_text)
+            resolved_elements.append({"uid": uid, "value": el.get("value", "")})
+        return {**step, "elements": resolved_elements}
+    if tool in _INTERACTIVE_TOOLS_NEEDING_UID:
+        if "uid" in step:
+            return step
+        if "selector" not in step:
+            raise FlowRefusedError(
+                f"{tool} step missing both 'uid' and 'selector'"
+            )
+        uid = _resolve_selector_to_uid(step["selector"], snapshot_text)
+        return {**step, "uid": uid}
+    return step
+
+
 # ─── Flow runner (sync wrapper + async impl) ────────────────────────────────
 
 def run_flow(flow: dict, run_id: str, allow_high_entropy: bool = False) -> dict:
@@ -766,12 +944,62 @@ async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> 
     snapshot_result: dict | None = None
     final_error: str | None = None
 
+    # Latest accessibility-tree text for selector → uid resolution. Updated
+    # after every take_snapshot; stale after interactive steps that mutate
+    # the DOM (click / fill / fill_form / navigate_page). Runner auto-takes
+    # a snapshot before an interactive step if the latest tree is stale.
+    last_snapshot_text: str = ""
+    snapshot_fresh: bool = False
+
     try:
         async with _mcp_session(errlog_path=server_errlog) as session:
             for i, step in enumerate(steps):
                 tool = step.get("tool")
+
+                # Interactive tools need a uid — resolve from the latest
+                # snapshot. If no fresh snapshot is available, auto-take one
+                # so the flow-script author doesn't have to interleave manual
+                # take_snapshot calls around every click/fill.
+                step_for_dispatch = step
+                if tool in _INTERACTIVE_TOOLS_NEEDING_UID or tool == "fill_form":
+                    needs_resolve = (
+                        ("selector" in step and "uid" not in step)
+                        or (tool == "fill_form" and any(
+                            isinstance(el, dict) and "selector" in el and "uid" not in el
+                            for el in (step.get("elements") or [])
+                        ))
+                    )
+                    if needs_resolve and not snapshot_fresh:
+                        try:
+                            auto_snap = await asyncio.wait_for(
+                                session.call_tool("take_snapshot", {}),
+                                timeout=MCP_CALL_TIMEOUT,
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            final_error = (
+                                f"step[{i}] {tool}: auto-snapshot for uid resolution failed: "
+                                f"{type(e).__name__}: {e}"
+                            )
+                            dispatcher_log.append(final_error)
+                            break
+                        last_snapshot_text = _snapshot_to_text(auto_snap)
+                        snapshot_fresh = True
+                        # Refresh URL tracker from the auto-snapshot too —
+                        # a server-side redirect (e.g. form POST→302) from
+                        # the previous interactive step is visible here.
+                        auto_url = _current_url_from_snapshot(last_snapshot_text)
+                        if auto_url:
+                            last_navigated_url = auto_url
+                    if needs_resolve:
+                        try:
+                            step_for_dispatch = _apply_selector_resolution(step, last_snapshot_text)
+                        except FlowRefusedError as e:
+                            final_error = f"step[{i}] {tool}: {type(e).__name__}: {e}"
+                            dispatcher_log.append(final_error)
+                            break
+
                 try:
-                    raw = await dispatch_step_async(session, step, flow, dispatcher_log)
+                    raw = await dispatch_step_async(session, step_for_dispatch, flow, dispatcher_log)
                 except Exception as e:  # noqa: BLE001 — capture + flatten
                     final_error = f"step[{i}] {tool}: {type(e).__name__}: {e}"
                     dispatcher_log.append(final_error)
@@ -779,6 +1007,19 @@ async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> 
                 steps_completed += 1
                 if tool == "navigate_page":
                     last_navigated_url = step.get("url")
+
+                # Snapshot freshness tracking. take_snapshot refreshes;
+                # DOM-mutating tools stale the tree.
+                if tool == "take_snapshot":
+                    last_snapshot_text = _snapshot_to_text(raw)
+                    snapshot_fresh = True
+                    # Refresh URL tracker — a server-side redirect from the
+                    # previous interactive step becomes visible here.
+                    snap_url = _current_url_from_snapshot(last_snapshot_text)
+                    if snap_url:
+                        last_navigated_url = snap_url
+                elif tool in {"click", "fill", "fill_form", "navigate_page", "type_text"}:
+                    snapshot_fresh = False
 
                 # Path C per-step persistence — every step's result lands on
                 # disk so the wrapper is auditable for every step, not just
@@ -809,6 +1050,12 @@ async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> 
                         timeout=MCP_CALL_TIMEOUT,
                     )
                     snapshot_result = _result_to_dict(snap)
+                    # Capture the actual current URL from the post-flow
+                    # snapshot — catches redirects triggered by the final
+                    # scripted step (e.g. the form submit click above).
+                    final_url = _current_url_from_snapshot(_snapshot_to_text(snap))
+                    if final_url:
+                        last_navigated_url = final_url
                 except Exception as e:  # noqa: BLE001
                     dispatcher_log.append(f"post-flow snapshot failed: {e}")
     except Exception as e:  # noqa: BLE001 — session-level failure
