@@ -575,6 +575,67 @@ _INDEX_STYLE = r"""
 .cluster .trend .pill.fail { background: var(--fail); }
 .cluster .trend .arrow { color: var(--muted); margin: 0 4px; font-size: 11px; }
 .cluster .trend .pill:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+.suite {
+  margin-top: 14px;
+  padding: 16px 20px;
+  background: var(--panel-2);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.suite-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.suite-head .label { font-weight: 600; font-size: 14px; }
+.suite-head .target { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.suite-head .summary { margin-left: auto; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.suite-head .summary .pass { color: var(--pass); }
+.suite-head .summary .fail { color: var(--fail); }
+.suite-head .summary .unclear { color: var(--warn); }
+.matrix { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.matrix th, .matrix td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.matrix th {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.matrix th.persona-col { text-align: center; }
+.matrix td.file-cell {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.matrix td.cell {
+  text-align: center;
+  font-family: var(--mono);
+}
+.matrix .verdict-link {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 4px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.matrix .verdict-link.pass { background: var(--pass); color: #fff; }
+.matrix .verdict-link.fail { background: var(--fail); color: #fff; }
+.matrix .verdict-link.unclear { background: var(--warn); color: #fff; }
+.matrix .verdict-link:hover { outline: 2px solid var(--accent); outline-offset: 1px; text-decoration: none; }
+.matrix .empty-cell { color: var(--muted); font-size: 14px; }
 """
 
 
@@ -1145,7 +1206,8 @@ _INDEX_JS = r"""
   render();
 
   function render() {
-    const hosts = Array.from(new Set((DATA.runs || []).map(r => r.target_host))).sort();
+    const allHosts = (DATA.runs || []).map(r => r.target_host).concat((DATA.suites || []).map(s => s.target_host));
+    const hosts = Array.from(new Set(allHosts)).filter(h => h).sort();
     const hostOptions = ['<option value="">All hosts</option>'].concat(hosts.map(h => '<option' + (prefs.host === h ? ' selected' : '') + '>' + escape(h) + '</option>')).join('');
     const mkSeg = (id, label) => '<button data-verdict="' + id + '"' + ((prefs.verdict || 'all') === id ? ' class="active"' : '') + '>' + label + '</button>';
     app.innerHTML =
@@ -1199,13 +1261,74 @@ _INDEX_JS = r"""
 
   function redraw() {
     const runs = filtered();
+    const suites = filteredSuites();
     const body = document.getElementById('view-body');
+    const suiteHtml = (suites || []).map(renderSuite).join('');
+    let runsHtml;
     if (prefs.view === 'clustered') {
-      body.innerHTML = renderClusters(runs);
+      runsHtml = renderClusters(runs);
     } else {
-      body.innerHTML = renderTable(runs);
+      runsHtml = renderTable(runs);
     }
-    document.getElementById('counts').textContent = runs.length + ' of ' + (DATA.runs || []).length + ' runs shown';
+    body.innerHTML = suiteHtml + runsHtml;
+    const totalSuites = (DATA.suites || []).length;
+    const totalRuns = (DATA.runs || []).length;
+    let counts = runs.length + ' of ' + totalRuns + ' runs shown';
+    if (totalSuites) {
+      counts = (suites || []).length + ' of ' + totalSuites + ' suites · ' + counts;
+    }
+    document.getElementById('counts').textContent = counts;
+  }
+
+  function renderSuite(s) {
+    const sum = s.verdict_summary || {};
+    const pass = sum.PASS || 0;
+    const unclear = sum.UNCLEAR || 0;
+    const fail = sum.FAIL || 0;
+    const personas = s.personas || [];
+    const files = s.files || [];
+    // Index journeys by file × persona for fast cell lookup.
+    const cells = {};
+    (s.journeys || []).forEach(j => {
+      cells[j.file + '|' + j.persona] = j;
+    });
+    const headerCols = personas.map(p => '<th class="persona-col">' + escape(p) + '</th>').join('');
+    const rows = files.map(f => {
+      const cellHtml = personas.map(p => {
+        const j = cells[f + '|' + p];
+        if (!j) return '<td class="cell empty-cell">—</td>';
+        const cls = j.verdict === 'PASS' ? 'pass' : j.verdict === 'UNCLEAR' ? 'unclear' : 'fail';
+        const tip = (j.matcher || '') + ' · ' + (j.duration_ms || 0) + 'ms';
+        return '<td class="cell"><a class="verdict-link ' + cls + '" href="' + escape(j.report_href) + '" title="' + escape(tip) + '">' + escape(j.verdict) + '</a></td>';
+      }).join('');
+      return '<tr><td class="file-cell">' + escape(f) + '</td>' + cellHtml + '</tr>';
+    }).join('');
+    return '<div class="suite">'
+      + '<div class="suite-head">'
+      + '<span class="label">' + escape(s.label) + '</span>'
+      + '<span class="target">' + escape(s.target) + '</span>'
+      + '<span class="summary">'
+      + '<span class="pass">PASS ' + pass + '</span> · '
+      + '<span class="unclear">UNCLEAR ' + unclear + '</span> · '
+      + '<span class="fail">FAIL ' + fail + '</span> · '
+      + escape(s.date)
+      + '</span></div>'
+      + '<table class="matrix"><thead><tr><th>Journey</th>' + headerCols + '</tr></thead>'
+      + '<tbody>' + rows + '</tbody></table>'
+      + '</div>';
+  }
+
+  function filteredSuites() {
+    const h = prefs.host || '';
+    const q = (prefs.query || '').toLowerCase();
+    return (DATA.suites || []).filter(s => {
+      if (h && s.target_host !== h) return false;
+      if (q) {
+        const hay = (s.label + ' ' + s.target + ' ' + (s.files || []).join(' ')).toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
   }
 
   function renderTable(runs) {

@@ -11,7 +11,7 @@
   "patience": {
     "max_clicks": 5,
     "max_dead_ends": 2,
-    "max_duration_ms": 30000
+    "max_duration_ms": 75000
   },
   "notes": "Template P5-2 — tests whether a returning user has a clear re-entry path. Sites that feel fine on the first visit often fail this because the homepage assumes you're new."
 }

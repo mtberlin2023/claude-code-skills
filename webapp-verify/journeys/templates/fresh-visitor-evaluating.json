@@ -11,7 +11,7 @@
   "patience": {
     "max_clicks": 6,
     "max_dead_ends": 2,
-    "max_duration_ms": 45000
+    "max_duration_ms": 90000
   },
   "notes": "Template P5-1 — the quintessential first-impression test. If a fresh visitor can't figure out what the site is within 6 clicks, that's a positioning problem, not a bug."
 }

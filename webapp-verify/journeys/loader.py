@@ -39,7 +39,10 @@ ALLOWED_SUCCESS_SHAPES: frozenset[str] = frozenset({
 DEFAULT_PATIENCE = {
     "max_clicks": 8,
     "max_dead_ends": 3,
-    "max_duration_ms": 45000,
+    # 90s default. chrome-devtools-mcp cold-start nav alone burns ~19s,
+    # leaving the prior 45s default structurally tight (observed undavos
+    # acceptance, 2026-04-24).
+    "max_duration_ms": 90000,
 }
 
 

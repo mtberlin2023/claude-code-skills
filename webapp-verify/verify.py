@@ -1571,7 +1571,7 @@ def main() -> int:
     # If argv[1] doesn't match a known subcommand or top-level flag, treat
     # it as a flow path and inject `flow` for the parser. Subcommands are
     # `flow` (default) and `journey` (v0.3 LLM-in-loop runner).
-    KNOWN_SUBCMDS = {"flow", "journey", "expand"}
+    KNOWN_SUBCMDS = {"flow", "journey", "journey-suite", "expand"}
     TOP_LEVEL_FLAGS = {
         "--audit-mode", "--list-allowlist", "--check-install",
         "-h", "--help",
@@ -1618,6 +1618,19 @@ def main() -> int:
                      help="Skip index.html regeneration.")
     j_p.set_defaults(report=True, index=True)
 
+    s_p = sub.add_parser(
+        "journey-suite",
+        help="Run a site.yaml — N journeys × shared target sequentially (v1.0 J5).",
+    )
+    s_p.add_argument("suite", help="Path to a site.yaml file.")
+    s_p.add_argument("--allow-high-entropy", action="store_true",
+                     help="Bypass the per-journey entropy scanner.")
+    s_p.add_argument("--no-report", action="store_false", dest="report",
+                     help="Skip per-journey report.html regeneration after the run.")
+    s_p.add_argument("--no-index", action="store_false", dest="index",
+                     help="Skip top-level index.html regeneration.")
+    s_p.set_defaults(report=True, index=True)
+
     e_p = sub.add_parser("expand", help="Expand prose into a journey JSON via LLM (v1.0 P1).")
     e_p.add_argument("prose", nargs="?", default=None,
                      help="Natural-language description of the journey. Use - to read from stdin.")
@@ -1649,6 +1662,8 @@ def main() -> int:
 
     if args.cmd == "journey":
         return _main_journey(args)
+    if args.cmd == "journey-suite":
+        return _main_journey_suite(args)
     if args.cmd == "expand":
         return _main_expand(args)
 
@@ -1703,6 +1718,55 @@ def _main_journey(args) -> int:
     if args.report:
         _emit_reports(result, include_index=args.index)
     return 0 if result.get("pass") else 1
+
+
+def _main_journey_suite(args) -> int:
+    from journeys.suite import load_suite, run_suite, SuiteRefusedError
+
+    suite_path = Path(args.suite)
+    if not suite_path.exists():
+        print(f"Suite not found: {suite_path}", file=sys.stderr)
+        return 1
+    try:
+        suite = load_suite(suite_path, allow_high_entropy=args.allow_high_entropy)
+    except SuiteRefusedError as e:
+        print(f"Suite refused: {e}", file=sys.stderr)
+        return 1
+
+    result = run_suite(suite)
+    summary = result["verdict_summary"]
+    label = result["site"].get("label") or result["site"]["target"]
+    print(
+        f"Suite {label}: PASS={summary.get('PASS', 0)} "
+        f"UNCLEAR={summary.get('UNCLEAR', 0)} FAIL={summary.get('FAIL', 0)} "
+        f"duration_ms={result['duration_ms']}"
+    )
+    for row in result["journeys"]:
+        print(
+            f"  • {row['file']} [{row['persona']}] → {row['verdict']} "
+            f"(matcher={row.get('matcher')!r}, iters={row.get('iterations')}, "
+            f"duration_ms={row.get('duration_ms')})"
+        )
+        if row.get("error"):
+            print(f"    error: {row['error']}", file=sys.stderr)
+    print(f"  artefacts: {result.get('artefacts_dir')}")
+
+    if args.report:
+        # Emit per-journey reports + one top-level index over the whole
+        # ARTEFACTS_ROOT (so the user sees both the suite dir and any
+        # prior run dirs in one navigable index).
+        for row in result["journeys"]:
+            _emit_reports(row, include_index=False)
+        if args.index:
+            try:
+                from reader.index import generate as generate_index
+                index_path = generate_index(ARTEFACTS_ROOT)
+                print(f"Index:  {index_path}")
+            except Exception as e:
+                print(f"[reader] index generation failed: {e}", file=sys.stderr)
+
+    # Suite passes only if every journey passed.
+    return 0 if summary.get("FAIL", 0) == 0 and summary.get("UNCLEAR", 0) == 0 else 1
 
 
 def _slugify_for_filename(text: str, max_len: int = 40) -> str:

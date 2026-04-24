@@ -11,7 +11,7 @@
   "patience": {
     "max_clicks": 4,
     "max_dead_ends": 1,
-    "max_duration_ms": 25000
+    "max_duration_ms": 60000
   },
   "notes": "Template P5-3 — hard cap on patience. Mobile users looking for contact info bail fast. If this takes more than 4 clicks you have a usability problem. Runner should use mobile viewport (375×812) when it lands."
 }

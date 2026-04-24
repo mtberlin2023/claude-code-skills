@@ -13,7 +13,7 @@
   "patience": {
     "max_clicks": 12,
     "max_dead_ends": 2,
-    "max_duration_ms": 60000
+    "max_duration_ms": 120000
   },
   "notes": "Template P5-4 — keyboard-only traversal. Runner enforces focus-visible check at every step (finding rule: `focus-not-visible`). Any focusable element without a visible :focus ring is a hard finding. Mouse-only CTA buttons fail this journey."
 }

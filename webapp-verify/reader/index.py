@@ -20,8 +20,15 @@ def generate(artefacts_root: Path) -> Path:
         raise FileNotFoundError(f"Not a directory: {artefacts_root}")
 
     runs = []
+    suites = []
     for d in sorted(artefacts_root.iterdir(), reverse=True):
         if not d.is_dir():
+            continue
+        suite_result_path = d / "suite-result.json"
+        if suite_result_path.exists() and d.name.startswith("suite-"):
+            suite_row = _suite_row(d)
+            if suite_row:
+                suites.append(suite_row)
             continue
         result_path = d / "result.json"
         flow_path = d / "flow.json"
@@ -34,7 +41,7 @@ def generate(artefacts_root: Path) -> Path:
             continue
         runs.append(_row(d, result, flow))
 
-    payload = {"runs": runs, "count": len(runs)}
+    payload = {"runs": runs, "suites": suites, "count": len(runs)}
     from .template import render_index
     html_out = render_index(payload)
     out_path = artefacts_root / "index.html"
@@ -59,6 +66,69 @@ def _row(run_dir: Path, result: dict, flow: dict) -> dict:
         "steps": f'{result.get("steps_completed", "?")}/{result.get("steps_total", "?")}',
         "findings": findings_count,
         "report_href": f'{run_dir.name}/report.html' if has_report else f'{run_dir.name}/',
+    }
+
+
+def _suite_row(suite_dir: Path) -> dict | None:
+    """Build the index payload entry for a suite-<id>/ directory.
+
+    Reads suite-result.json (the roll-up) and walks each journey's
+    artefact dir to confirm report.html paths and pick up final verdict.
+    Returns None if suite-result.json is missing/malformed."""
+    sr_path = suite_dir / "suite-result.json"
+    try:
+        sr = json.loads(sr_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    site = sr.get("site") or {}
+    target = site.get("target") or ""
+    host = urlparse(target).hostname or "—"
+    label = site.get("label") or host
+
+    journey_rows: list[dict] = []
+    personas_seen: list[str] = []
+    files_seen: list[str] = []
+    for jr in sr.get("journeys") or []:
+        run_id = jr.get("run_id") or ""
+        # The journey runner wrote into suite-<id>/<run_id>/.
+        run_subdir = suite_dir / run_id
+        report_rel = (
+            f"{suite_dir.name}/{run_id}/report.html"
+            if (run_subdir / "report.html").exists()
+            else f"{suite_dir.name}/{run_id}/"
+        )
+        f = jr.get("file") or "?"
+        persona = jr.get("persona") or "—"
+        if persona not in personas_seen:
+            personas_seen.append(persona)
+        if f not in files_seen:
+            files_seen.append(f)
+        journey_rows.append({
+            "file": f,
+            "persona": persona,
+            "persona_override": jr.get("persona_override"),
+            "intent": jr.get("intent") or "",
+            "verdict": jr.get("verdict") or "FAIL",
+            "matcher": jr.get("matcher"),
+            "iterations": jr.get("iterations"),
+            "duration_ms": jr.get("duration_ms"),
+            "run_id": run_id,
+            "report_href": report_rel,
+        })
+
+    suite_id = sr.get("suite_id") or suite_dir.name.removeprefix("suite-")
+    return {
+        "suite_id": suite_id,
+        "label": label,
+        "target": target,
+        "target_host": host,
+        "date": _run_id_to_date(suite_id),
+        "verdict_summary": sr.get("verdict_summary") or {},
+        "duration_ms": sr.get("duration_ms"),
+        "journeys": journey_rows,
+        "files": files_seen,
+        "personas": personas_seen,
     }
 
 

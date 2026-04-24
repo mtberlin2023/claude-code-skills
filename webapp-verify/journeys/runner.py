@@ -60,12 +60,20 @@ VERDICT_FAIL = "FAIL"
 VERDICT_UNCLEAR = "UNCLEAR"
 
 
-def run_journey(journey: dict, run_id: str | None = None) -> dict:
+def run_journey(
+    journey: dict,
+    run_id: str | None = None,
+    artefacts_root: Path | None = None,
+) -> dict:
     """Execute a validated journey (output of journeys.loader.load_journey).
-    Returns a result dict in flow-runner shape so the reader can render it."""
+    Returns a result dict in flow-runner shape so the reader can render it.
+
+    artefacts_root overrides the default ARTEFACTS_ROOT — used by the
+    journey-suite runner to nest per-journey runs inside one suite dir.
+    """
     if run_id is None:
         run_id = new_run_id()
-    return asyncio.run(_run_journey_async(journey, run_id))
+    return asyncio.run(_run_journey_async(journey, run_id, artefacts_root))
 
 
 def _check_success(
@@ -120,13 +128,15 @@ def _make_synthetic_flow(journey: dict, executed_steps: list[dict]) -> dict:
     }
 
 
-async def _run_journey_async(journey: dict, run_id: str) -> dict:
+async def _run_journey_async(
+    journey: dict, run_id: str, artefacts_root: Path | None = None
+) -> dict:
     resolved = journey["_resolved"]
     persona = resolved["persona"]
     tactics = list(resolved["tactics"])
     patience = dict(resolved["patience"])
 
-    run_dir = ensure_artefacts_dir(run_id)
+    run_dir = ensure_artefacts_dir(run_id, root=artefacts_root)
     write_artefact_json(run_dir, "journey.json", {
         k: v for k, v in journey.items() if not k.startswith("_")
     })
