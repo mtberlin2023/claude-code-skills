@@ -1,0 +1,17 @@
+{
+  "$schema": "webwitness/journey/v0.3",
+  "intent": "A returning visitor came back to finish something they started on a previous visit — find the page they were last on, pick up where they left off, complete the next step.",
+  "persona": "returning",
+  "target": "REPLACE_ME_WITH_TARGET_URL",
+  "allowed_tactics": ["click_nav", "click_cta", "follow_link", "read_content", "scroll"],
+  "success": {
+    "shape": "landed_on",
+    "url_pattern": "REPLACE_ME_WITH_CONTINUATION_PATH"
+  },
+  "patience": {
+    "max_clicks": 5,
+    "max_dead_ends": 2,
+    "max_duration_ms": 30000
+  },
+  "notes": "Template P5-2 — tests whether a returning user has a clear re-entry path. Sites that feel fine on the first visit often fail this because the homepage assumes you're new."
+}

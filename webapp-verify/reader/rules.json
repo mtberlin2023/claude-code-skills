@@ -1,0 +1,61 @@
+{
+  "rules": [
+    {
+      "id": "img-placeholder-alt",
+      "severity": "warn",
+      "description": "Image alt text looks like a Webflow/builder slot name, not real alt text.",
+      "applies_to": "image",
+      "match_any": [
+        "^(Home\\s?Hero|Hero|Summit|Background|Colou?rful\\s?line|Line|Group|Rectangle|Frame|Shape|Slot|Image)(\\s?\\w+)?\\s*$",
+        "-finished\\.(webp|svg|png|jpg|jpeg)$",
+        "^(IMG|Asset|Placeholder)[_\\s-]?\\d+",
+        "^(Powered\\s?by|Power(ed)?\\s?by\\s?Icon)$"
+      ]
+    },
+    {
+      "id": "img-no-alt",
+      "severity": "warn",
+      "description": "Image has no accessible name.",
+      "applies_to": "image",
+      "match_empty_name": true
+    },
+    {
+      "id": "h1-missing",
+      "severity": "warn",
+      "description": "No H1 heading found anywhere in the page.",
+      "applies_to": "tree",
+      "check": "no_h1"
+    },
+    {
+      "id": "h1-below-statictext",
+      "severity": "warn",
+      "description": "H1 appears after 3+ consecutive StaticText nodes at the same depth — headings should land before content.",
+      "applies_to": "tree",
+      "check": "h1_below_statictext",
+      "min_statictext_run": 3
+    },
+    {
+      "id": "player-controls-exposed",
+      "severity": "warn",
+      "description": "Video-player controls (Play/Mute/Subtitles/Fullscreen) are exposed as top-level buttons in the a11y tree.",
+      "applies_to": "button",
+      "match_any_name": [
+        "^(Play(\\s?\\(k\\))?|Pause|Mute|Unmute|Subtitles|Captions|Settings|Quality|Speed|Fullscreen|Theater\\s?mode|Watch\\s?on\\s?YouTube|Next|Previous|Share)\\b"
+      ]
+    },
+    {
+      "id": "busy-on-final",
+      "severity": "info",
+      "description": "Final snapshot still has 'busy' flag — page hadn't finished rendering when verdict was written.",
+      "applies_to": "tree",
+      "check": "final_busy"
+    },
+    {
+      "id": "url-unchanged-after-click",
+      "severity": "info",
+      "description": "Snapshot captured immediately after a click has the same URL as the one before the click — navigation may have been in flight when verdict was evaluated.",
+      "applies_to": "run",
+      "check": "url_unchanged_after_click"
+    }
+  ]
+}

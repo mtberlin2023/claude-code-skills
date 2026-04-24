@@ -1,0 +1,19 @@
+{
+  "$schema": "webwitness/journey/v0.3",
+  "intent": "A keyboard-only user (screen-reader or motor-accessibility need) traverses the site from home to the primary call-to-action using only Tab, Enter, and arrow keys. Every focusable element must be reachable and its focus state must be visible.",
+  "persona": "fresh",
+  "target": "REPLACE_ME_WITH_TARGET_URL",
+  "allowed_tactics": ["click_nav", "click_cta", "follow_link", "read_content"],
+  "forbidden_tactics": ["scroll", "use_search"],
+  "success": {
+    "shape": "reached_goal",
+    "url_pattern": "REPLACE_ME_WITH_CTA_PATH",
+    "landmark": {"role": "heading", "name_contains": "REPLACE_ME_WITH_DESTINATION_HEADING"}
+  },
+  "patience": {
+    "max_clicks": 12,
+    "max_dead_ends": 2,
+    "max_duration_ms": 60000
+  },
+  "notes": "Template P5-4 — keyboard-only traversal. Runner enforces focus-visible check at every step (finding rule: `focus-not-visible`). Any focusable element without a visible :focus ring is a hard finding. Mouse-only CTA buttons fail this journey."
+}

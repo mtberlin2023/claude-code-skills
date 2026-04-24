@@ -128,6 +128,19 @@ FLAG_GATED_TOOLS: dict[str, str] = {
     "screencast_stop": "--experimentalScreencast",
 }
 
+# Verify-level step types — synthesised by the runner, not MCP tool calls.
+# Safe by construction (no DOM mutation, no network egress); bypass ALLOWLIST.
+VERIFY_STEPS: frozenset[str] = frozenset({
+    "wait_for_url_change",
+})
+
+# Free-text metadata paths that bypass the entropy gate but still get
+# token-shape scanning. Natural-language prose (goals, intents) routinely
+# trips Shannon entropy thresholds without being secrets.
+ENTROPY_SKIP_LEAVES: frozenset[str] = frozenset({
+    "goal", "description", "intent", "notes", "rationale", "persona",
+})
+
 # Server-start flags the wrapper forces on every invocation.
 FORCED_SERVER_FLAGS: list[str] = [
     "--isolated",
@@ -318,6 +331,21 @@ def _scan_flow_entropy(flow: dict, allow_high_entropy: bool) -> None:
                     f"pass --allow-high-entropy; otherwise move the value to "
                     f"an env var."
                 )
+            last_leaf = path.rsplit(".", 1)[-1].split("[")[0]
+            if last_leaf in ENTROPY_SKIP_LEAVES:
+                # Free-text prose field: check each whitespace-delimited token
+                # individually. Natural English words never trip the threshold;
+                # a long token-shaped blob embedded in prose still does.
+                for token in node.split():
+                    if _is_high_entropy(token):
+                        raise FlowRefusedError(
+                            f"flow field '{path}' contains a high-entropy token "
+                            f"inside a free-text field ('{token[:24]}…', "
+                            f"{len(token)} chars). Looks like a secret embedded in "
+                            f"prose. If intentional, pass --allow-high-entropy; "
+                            f"otherwise remove the token."
+                        )
+                return
             if _is_high_entropy(node):
                 raise FlowRefusedError(
                     f"flow field '{path}' contains a high-entropy string "
@@ -496,10 +524,11 @@ def load_flow(path: Path, allow_high_entropy: bool = False) -> dict:
                 f"step[{i}] tool '{tool}' is in the default deny-list. "
                 f"See SKILL.md 'Deny-list' for rationale."
             )
-        if tool not in ALLOWLIST and tool != "emulate":
+        if tool not in ALLOWLIST and tool != "emulate" and tool not in VERIFY_STEPS:
             raise FlowRefusedError(
                 f"step[{i}] tool '{tool}' is not in the allowlist. "
-                f"Allowed: {sorted(ALLOWLIST)} + 'emulate' (parameter-gated)."
+                f"Allowed: {sorted(ALLOWLIST)} + 'emulate' + "
+                f"verify-level {sorted(VERIFY_STEPS)}."
             )
         if tool == "navigate_page":
             _validate_step_url(i, step.get("url", ""))
@@ -943,6 +972,8 @@ async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> 
     last_navigated_url: str | None = None
     snapshot_result: dict | None = None
     final_error: str | None = None
+    step_durations_ms: list[int | None] = []
+    run_start = time.perf_counter()
 
     # Latest accessibility-tree text for selector → uid resolution. Updated
     # after every take_snapshot; stale after interactive steps that mutate
@@ -955,6 +986,55 @@ async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> 
         async with _mcp_session(errlog_path=server_errlog) as session:
             for i, step in enumerate(steps):
                 tool = step.get("tool")
+                step_start = time.perf_counter()
+
+                # Verify-level step: wait_for_url_change. Poll take_snapshot
+                # until the RootWebArea URL differs from the pre-step URL, or
+                # the timeout expires. Written as a synthetic step artefact.
+                if tool == "wait_for_url_change":
+                    timeout_ms = int(step.get("timeout_ms", 3000))
+                    poll_ms = int(step.get("poll_interval_ms", 200))
+                    initial_url = last_navigated_url
+                    polls = 0
+                    changed = False
+                    final_url = initial_url
+                    wait_start = time.perf_counter()
+                    while (time.perf_counter() - wait_start) * 1000 < timeout_ms:
+                        polls += 1
+                        try:
+                            snap = await asyncio.wait_for(
+                                session.call_tool("take_snapshot", {}),
+                                timeout=MCP_CALL_TIMEOUT,
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            final_error = f"step[{i}] wait_for_url_change: poll failed: {type(e).__name__}: {e}"
+                            dispatcher_log.append(final_error)
+                            break
+                        snap_text = _snapshot_to_text(snap)
+                        snap_url = _current_url_from_snapshot(snap_text)
+                        if snap_url and snap_url != initial_url:
+                            final_url = snap_url
+                            changed = True
+                            last_snapshot_text = snap_text
+                            last_navigated_url = snap_url
+                            snapshot_fresh = True
+                            break
+                        await asyncio.sleep(poll_ms / 1000.0)
+                    if final_error is not None:
+                        break
+                    elapsed_ms = int((time.perf_counter() - wait_start) * 1000)
+                    steps_completed += 1
+                    step_label = f"step-{i + 1:02d}-{tool}"
+                    write_artefact_json(run_dir, f"{step_label}.json", {
+                        "initial_url": initial_url,
+                        "final_url": final_url,
+                        "changed": changed,
+                        "elapsed_ms": elapsed_ms,
+                        "polls": polls,
+                        "timeout_ms": timeout_ms,
+                    })
+                    step_durations_ms.append(int((time.perf_counter() - step_start) * 1000))
+                    continue
 
                 # Interactive tools need a uid — resolve from the latest
                 # snapshot. If no fresh snapshot is available, auto-take one
@@ -1037,6 +1117,7 @@ async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> 
                     suffix = "" if len(blobs) == 1 else f"-{chr(ord('a') + j)}"
                     ext = _ext_for_mime(mime)
                     write_artefact_bytes(run_dir, f"{step_label}{suffix}{ext}", data)
+                step_durations_ms.append(int((time.perf_counter() - step_start) * 1000))
 
             # After the scripted steps, capture a snapshot for success_state
             # evaluation (landmark matcher needs it; url-pattern matcher uses
@@ -1095,6 +1176,8 @@ async def _run_flow_async(flow: dict, run_id: str, allow_high_entropy: bool) -> 
         "artefacts_dir": str(run_dir),
         "steps_completed": steps_completed,
         "steps_total": len(steps),
+        "step_durations_ms": step_durations_ms,
+        "duration_ms": int((time.perf_counter() - run_start) * 1000),
         "error": final_error,
     }
     write_artefact_json(run_dir, "result.json", result)
@@ -1484,24 +1567,58 @@ def list_allowlist() -> None:
 # ─── main() ─────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    # Backward compat: `verify.py <flow.json>` (no subcommand) still works.
+    # If argv[1] doesn't match a known subcommand or top-level flag, treat
+    # it as a flow path and inject `flow` for the parser. Subcommands are
+    # `flow` (default) and `journey` (v0.3 LLM-in-loop runner).
+    KNOWN_SUBCMDS = {"flow", "journey"}
+    TOP_LEVEL_FLAGS = {
+        "--audit-mode", "--list-allowlist", "--check-install",
+        "-h", "--help",
+    }
+    argv = list(sys.argv[1:])
+    if argv and argv[0] not in KNOWN_SUBCMDS and not any(
+        argv[0] == f or argv[0].startswith(f + "=") for f in TOP_LEVEL_FLAGS
+    ):
+        argv = ["flow"] + argv
+
     ap = argparse.ArgumentParser(
         prog="verify.py",
-        description="Run a scripted flow against a live URL via Chrome DevTools MCP.",
+        description="Run a scripted flow or journey against a live URL via Chrome DevTools MCP.",
     )
-    ap.add_argument("flow", nargs="?", default=None,
-                    help="Path to a flow-script JSON file.")
     ap.add_argument("--audit-mode", metavar="URL", default=None,
                     help="Dump substrate shape (snapshot/network/console × 3 viewports) and exit.")
     ap.add_argument("--confirm-substrate-audit", action="store_true",
                     help="Required to run --audit-mode (PII-gate).")
-    ap.add_argument("--allow-high-entropy", action="store_true",
-                    help="Bypass the flow-script entropy scanner. Use when the flow "
-                         "intentionally includes high-entropy values (e.g. hashes, UUIDs).")
     ap.add_argument("--list-allowlist", action="store_true",
                     help="Print allowlist + deny-list + parameter gates and exit.")
     ap.add_argument("--check-install", action="store_true",
                     help="Verify chrome-devtools-mcp is reachable via npx and exit.")
-    args = ap.parse_args()
+
+    sub = ap.add_subparsers(dest="cmd", required=False)
+
+    flow_p = sub.add_parser("flow", help="Run a flow-script JSON file (default).")
+    flow_p.add_argument("flow", nargs="?", default=None,
+                        help="Path to a flow-script JSON file.")
+    flow_p.add_argument("--allow-high-entropy", action="store_true",
+                        help="Bypass the flow-script entropy scanner.")
+    flow_p.add_argument("--no-report", action="store_false", dest="report",
+                        help="Skip report.html + index.html regeneration after the run.")
+    flow_p.add_argument("--no-index", action="store_false", dest="index",
+                        help="Skip index.html regeneration.")
+    flow_p.set_defaults(report=True, index=True)
+
+    j_p = sub.add_parser("journey", help="Run a journey JSON file (v0.3 LLM-in-loop).")
+    j_p.add_argument("journey", help="Path to a journey JSON file.")
+    j_p.add_argument("--allow-high-entropy", action="store_true",
+                     help="Bypass the journey entropy scanner.")
+    j_p.add_argument("--no-report", action="store_false", dest="report",
+                     help="Skip report.html + index.html regeneration after the run.")
+    j_p.add_argument("--no-index", action="store_false", dest="index",
+                     help="Skip index.html regeneration.")
+    j_p.set_defaults(report=True, index=True)
+
+    args = ap.parse_args(argv)
 
     if args.list_allowlist:
         list_allowlist()
@@ -1518,7 +1635,11 @@ def main() -> int:
             print(f"Audit refused: {e}", file=sys.stderr)
             return 3
 
-    if not args.flow:
+    if args.cmd == "journey":
+        return _main_journey(args)
+
+    # Default / explicit `flow` subcommand path.
+    if not getattr(args, "flow", None):
         ap.print_help()
         return 1
 
@@ -1536,7 +1657,54 @@ def main() -> int:
     run_id = new_run_id()
     result = run_flow(flow, run_id, allow_high_entropy=args.allow_high_entropy)
     emit_verdict(result)
+    if args.report:
+        _emit_reports(result, include_index=args.index)
     return 0 if result.get("pass") else 1
+
+
+def _main_journey(args) -> int:
+    from journeys.loader import load_journey, JourneyRefusedError
+    from journeys.runner import run_journey
+
+    journey_path = Path(args.journey)
+    if not journey_path.exists():
+        print(f"Journey not found: {journey_path}", file=sys.stderr)
+        return 1
+    try:
+        journey = load_journey(journey_path, allow_high_entropy=args.allow_high_entropy)
+    except JourneyRefusedError as e:
+        print(f"Journey refused: {e}", file=sys.stderr)
+        return 1
+
+    result = run_journey(journey)
+    verdict = result.get("verdict", "FAIL" if not result.get("pass") else "PASS")
+    print(
+        f"Journey {verdict}: matcher={result.get('matcher')!r} "
+        f"iters={result.get('iterations')} clicks={result.get('clicks_used')} "
+        f"dead_ends={result.get('dead_ends')} duration_ms={result.get('duration_ms')}"
+    )
+    if result.get("error"):
+        print(f"  error: {result['error']}", file=sys.stderr)
+    print(f"  artefacts: {result.get('artefacts_dir')}")
+    if args.report:
+        _emit_reports(result, include_index=args.index)
+    return 0 if result.get("pass") else 1
+
+
+def _emit_reports(result: dict, include_index: bool) -> None:
+    artefacts_dir = result.get("artefacts_dir")
+    if not artefacts_dir:
+        return
+    try:
+        from reader.report import generate as generate_report
+        report_path = generate_report(Path(artefacts_dir))
+        print(f"Report: {report_path}")
+        if include_index:
+            from reader.index import generate as generate_index
+            index_path = generate_index(Path(artefacts_dir).parent)
+            print(f"Index:  {index_path}")
+    except Exception as e:
+        print(f"[reader] report generation failed: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

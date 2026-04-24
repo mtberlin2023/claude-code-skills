@@ -1,0 +1,77 @@
+{
+  "$schema": "webwitness/personas/v0.3",
+  "personas": [
+    {
+      "id": "fresh",
+      "label": "Fresh visitor",
+      "description": "First-time visitor. Has never heard of this site. No cookies, no storage, no referrer. No preconceptions about what the site is or does.",
+      "seed": {
+        "cookies": [],
+        "local_storage": [],
+        "session_storage": [],
+        "referrer": null,
+        "user_agent_override": null
+      },
+      "llm_framing": "You are a first-time visitor who has never heard of this site and has no context about what it offers. You are evaluating whether this is worth your time.",
+      "patience_default": {"max_clicks": 8, "max_dead_ends": 3}
+    },
+    {
+      "id": "returning",
+      "label": "Returning visitor",
+      "description": "Has visited this site once before and has some vague memory of what it is. Cookies indicate a prior session but no account.",
+      "seed": {
+        "cookies": [
+          {"name": "visited_before", "value": "1", "path": "/"}
+        ],
+        "local_storage": [
+          {"key": "wx_last_visit_ts", "value_is_timestamp": true, "offset_days_ago": 14}
+        ],
+        "session_storage": [],
+        "referrer": "https://www.google.com/",
+        "user_agent_override": null
+      },
+      "llm_framing": "You visited this site about two weeks ago and have a vague sense of what it is, but you can't remember specifics. You're back to check on something or complete an action you started.",
+      "patience_default": {"max_clicks": 6, "max_dead_ends": 2}
+    },
+    {
+      "id": "engaged",
+      "label": "Engaged lead",
+      "description": "Has visited multiple times, subscribed to email updates. Has not purchased or created an account yet. Is actively evaluating the offering.",
+      "seed": {
+        "cookies": [
+          {"name": "visited_before", "value": "1", "path": "/"},
+          {"name": "email_subscribed", "value": "1", "path": "/"}
+        ],
+        "local_storage": [
+          {"key": "wx_last_visit_ts", "value_is_timestamp": true, "offset_days_ago": 2},
+          {"key": "wx_visit_count", "value": "4"}
+        ],
+        "session_storage": [],
+        "referrer": "https://mail.google.com/",
+        "user_agent_override": null
+      },
+      "llm_framing": "You subscribed to this site's email list. You've been reading their updates and are actively evaluating whether to engage further (attend, buy, register). You have specific questions.",
+      "patience_default": {"max_clicks": 10, "max_dead_ends": 4}
+    },
+    {
+      "id": "authenticated",
+      "label": "Authenticated user",
+      "description": "Logged in. Has an account. Expects personalised state (their saved items, their dashboard, their name).",
+      "seed": {
+        "cookies": [
+          {"name": "session", "value": "PERSONA_FAKE_SESSION_TOKEN_REPLACE_ME", "path": "/", "http_only": true}
+        ],
+        "local_storage": [
+          {"key": "user_id", "value": "persona-auth-seed"},
+          {"key": "wx_last_visit_ts", "value_is_timestamp": true, "offset_days_ago": 1}
+        ],
+        "session_storage": [],
+        "referrer": null,
+        "user_agent_override": null,
+        "seed_notes": "The session cookie is a placeholder. For journeys against real auth-gated sites, the runner needs a live login flow or a test account — out of scope for v0.3."
+      },
+      "llm_framing": "You are logged in to this site and have used it before. You expect to see your own dashboard / saved items / profile. If something looks generic or unpersonalised, that's surprising.",
+      "patience_default": {"max_clicks": 6, "max_dead_ends": 2}
+    }
+  ]
+}
