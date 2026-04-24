@@ -218,18 +218,41 @@ async def _run_journey_async(
                     verdict = VERDICT_PASS
                     break
 
-                # Patience exhaustion → UNCLEAR.
+                # Patience exhaustion → UNCLEAR. Log the cap event to
+                # decisions.jsonl so the narrative ends on a real entry
+                # rather than dropping the final iteration silently.
                 if pr["clicks"] <= 0:
                     verdict = VERDICT_UNCLEAR
                     matcher = "patience.max_clicks"
+                    write_decision({
+                        "iter": iterations,
+                        "action": "patience_exhausted",
+                        "rationale": f"max_clicks budget exhausted ({patience['max_clicks']} clicks used)",
+                        "url": last_navigated_url,
+                        "observed": "stopped: patience.max_clicks reached",
+                    })
                     break
                 if pr["dead_ends"] <= 0:
                     verdict = VERDICT_UNCLEAR
                     matcher = "patience.max_dead_ends"
+                    write_decision({
+                        "iter": iterations,
+                        "action": "patience_exhausted",
+                        "rationale": f"max_dead_ends budget exhausted ({patience['max_dead_ends']} dead-ends hit)",
+                        "url": last_navigated_url,
+                        "observed": "stopped: patience.max_dead_ends reached",
+                    })
                     break
                 if pr["duration_ms"] <= 0:
                     verdict = VERDICT_UNCLEAR
                     matcher = "patience.max_duration_ms"
+                    write_decision({
+                        "iter": iterations,
+                        "action": "patience_exhausted",
+                        "rationale": f"max_duration_ms budget exhausted ({patience['max_duration_ms']}ms cap)",
+                        "url": last_navigated_url,
+                        "observed": "stopped: patience.max_duration_ms reached",
+                    })
                     break
 
                 # Ask the LLM what this persona would do next.

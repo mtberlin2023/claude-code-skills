@@ -1,0 +1,17 @@
+schema: webwitness/site/v0.3
+label: undavos production
+target: https://undavos.com/
+
+journeys:
+  # The acceptance journey — what a fresh LinkedIn-referred visitor would do.
+  - file: acceptance-undavos-fresh.json
+  # Same journey, returning persona — should the LLM framing change behaviour
+  # vs the fresh visitor? Alpha personas are framing-only so any divergence
+  # is purely down to the prompt frame, not seeded state.
+  - file: acceptance-undavos-fresh.json
+    persona: returning
+  # Mobile contact lookup — can someone on a phone find an email/contact?
+  - file: templates/mobile-contact-lookup.json
+  # Same mobile journey but as an "engaged lead" persona.
+  - file: templates/mobile-contact-lookup.json
+    persona: engaged
