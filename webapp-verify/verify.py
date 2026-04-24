@@ -1571,7 +1571,7 @@ def main() -> int:
     # If argv[1] doesn't match a known subcommand or top-level flag, treat
     # it as a flow path and inject `flow` for the parser. Subcommands are
     # `flow` (default) and `journey` (v0.3 LLM-in-loop runner).
-    KNOWN_SUBCMDS = {"flow", "journey"}
+    KNOWN_SUBCMDS = {"flow", "journey", "expand"}
     TOP_LEVEL_FLAGS = {
         "--audit-mode", "--list-allowlist", "--check-install",
         "-h", "--help",
@@ -1618,6 +1618,18 @@ def main() -> int:
                      help="Skip index.html regeneration.")
     j_p.set_defaults(report=True, index=True)
 
+    e_p = sub.add_parser("expand", help="Expand prose into a journey JSON via LLM (v1.0 P1).")
+    e_p.add_argument("prose", nargs="?", default=None,
+                     help="Natural-language description of the journey. Use - to read from stdin.")
+    e_p.add_argument("--target", required=True, metavar="URL",
+                     help="Target URL for the journey.")
+    e_p.add_argument("--out", default=None, metavar="PATH",
+                     help="Output path for the expanded journey JSON. Default: journeys/expanded-<slug>.json.")
+    e_p.add_argument("--persona-hint", default=None, metavar="ID",
+                     help="Suggested persona id (fresh|returning|engaged|authenticated). LLM may override if prose contradicts.")
+    e_p.add_argument("--run", action="store_true",
+                     help="After successful expand, immediately run the journey.")
+
     args = ap.parse_args(argv)
 
     if args.list_allowlist:
@@ -1637,6 +1649,8 @@ def main() -> int:
 
     if args.cmd == "journey":
         return _main_journey(args)
+    if args.cmd == "expand":
+        return _main_expand(args)
 
     # Default / explicit `flow` subcommand path.
     if not getattr(args, "flow", None):
@@ -1688,6 +1702,62 @@ def _main_journey(args) -> int:
     print(f"  artefacts: {result.get('artefacts_dir')}")
     if args.report:
         _emit_reports(result, include_index=args.index)
+    return 0 if result.get("pass") else 1
+
+
+def _slugify_for_filename(text: str, max_len: int = 40) -> str:
+    """Lower-case, hyphenated, alnum-only slug for default filenames."""
+    import re as _re
+    s = _re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return (s[:max_len].rstrip("-")) or "journey"
+
+
+def _main_expand(args) -> int:
+    from journeys.expander import expand_to_file, ExpanderError
+    from journeys.runner import run_journey
+    from journeys.loader import load_journey
+
+    prose = args.prose
+    if prose == "-" or prose is None:
+        prose = sys.stdin.read()
+    if not prose or not prose.strip():
+        print("expand: prose is empty (pass it as an arg or pipe via stdin with `-`)", file=sys.stderr)
+        return 1
+
+    if args.out:
+        out_path = Path(args.out)
+    else:
+        slug = _slugify_for_filename(prose.split(".")[0])
+        out_path = Path(__file__).parent / "journeys" / f"expanded-{slug}.json"
+
+    try:
+        written = expand_to_file(
+            prose=prose,
+            target_url=args.target,
+            out_path=out_path,
+            persona_hint=args.persona_hint,
+        )
+    except ExpanderError as e:
+        print(f"Expand failed: {e}", file=sys.stderr)
+        return 1
+
+    print(f"Expanded journey: {written}")
+    if not args.run:
+        print("  (run with: verify.py journey " + str(written) + ")")
+        return 0
+
+    journey = load_journey(written)
+    result = run_journey(journey)
+    verdict = result.get("verdict", "FAIL" if not result.get("pass") else "PASS")
+    print(
+        f"Journey {verdict}: matcher={result.get('matcher')!r} "
+        f"iters={result.get('iterations')} clicks={result.get('clicks_used')} "
+        f"dead_ends={result.get('dead_ends')} duration_ms={result.get('duration_ms')}"
+    )
+    if result.get("error"):
+        print(f"  error: {result['error']}", file=sys.stderr)
+    print(f"  artefacts: {result.get('artefacts_dir')}")
+    _emit_reports(result, include_index=True)
     return 0 if result.get("pass") else 1
 
 

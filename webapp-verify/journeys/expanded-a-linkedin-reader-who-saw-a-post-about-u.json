@@ -1,0 +1,27 @@
+{
+  "$schema": "webwitness/journey/v0.3",
+  "intent": "Find the date, location, and topics of the Undavos summit to decide if it's worth attending.",
+  "persona": "fresh",
+  "target": "https://undavos.com/",
+  "allowed_tactics": [
+    "click_nav",
+    "click_cta",
+    "follow_link",
+    "read_content",
+    "scroll"
+  ],
+  "success": {
+    "shape": "saw_content",
+    "required_content": [
+      "date",
+      "location",
+      "topic"
+    ]
+  },
+  "patience": {
+    "max_clicks": 6,
+    "max_dead_ends": 2,
+    "max_duration_ms": 45000
+  },
+  "notes": "Tests whether casual visitors can quickly surface key event information from the homepage."
+}
