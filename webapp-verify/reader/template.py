@@ -701,6 +701,22 @@ _INDEX_STYLE = r"""
   margin-left: 8px;
   font-weight: 600;
 }
+.suite-diff-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--info);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+.suite-diff-badge:hover { filter: brightness(1.1); }
+.suite-diff-badge--alert { background: var(--fail); }
+.suite-diff-badge--stable { background: var(--pass); }
 .diffs-panel {
   margin-top: 14px;
   padding: 16px 20px;
@@ -1459,12 +1475,33 @@ _INDEX_JS = r"""
     const viewportBadge = hasViewports
       ? '<span class="viewport-axis-badge" title="P7 device matrix: each journey runs once per viewport. Cells link to per-(journey × persona × viewport) report.">' + viewports.length + ' viewports</span>'
       : '';
+    const sd = s.suite_diff;
+    const suiteDiffBadge = sd
+      ? (function () {
+          const flipped = sd.verdict_changed || 0;
+          const total = sd.compared_total || 0;
+          const baseline = sd.baseline_viewport || 'baseline';
+          const cls = flipped > 0 ? 'suite-diff-badge suite-diff-badge--alert'
+            : 'suite-diff-badge suite-diff-badge--stable';
+          const label = flipped > 0
+            ? flipped + '/' + total + ' verdict-changed'
+            : total + '/' + total + ' verdict-stable';
+          const tip = 'suite-diff vs ' + baseline + ': ' + flipped
+            + ' of ' + total + ' compared cells flipped verdict.'
+            + (sd.matcher_changed ? ' ' + sd.matcher_changed + ' matcher-changed.' : '')
+            + ' Click to open the first per-pair diff.';
+          return sd.first_diff_href
+            ? '<a class="' + cls + '" href="' + escape(sd.first_diff_href) + '" title="' + escape(tip) + '">' + escape(label) + '</a>'
+            : '<span class="' + cls + '" title="' + escape(tip) + '">' + escape(label) + '</span>';
+        })()
+      : '';
     return '<div class="suite">'
       + '<div class="suite-head">'
       + '<span class="label">' + escape(s.label) + '</span>'
       + '<span class="target">' + escape(s.target) + '</span>'
       + '<span class="alpha-badge" title="v0.3 alpha personas: LLM-framing only. Real cookie/storage seeding deferred to v0.4 per BRIEF-032. Persona variants of the same journey may not produce distinct traces.">v0.3α framing-only personas</span>'
       + viewportBadge
+      + suiteDiffBadge
       + '<span class="summary">'
       + '<span class="pass">PASS ' + pass + '</span> · '
       + '<span class="unclear">UNCLEAR ' + unclear + '</span> · '

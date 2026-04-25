@@ -249,3 +249,108 @@ def test_malformed_diff_result_skipped(tmp_path: Path):
     (diff_dir / "diff-result.json").write_text("{not json", encoding="utf-8")
     payload = _index_payload(tmp_path)
     assert payload["diffs"] == []
+
+
+# ─── suite_diff badge payload (suite-header v1.0 lift) ─────────────────────
+
+
+def _write_suite_diff_result(
+    suite_dir: Path,
+    *,
+    baseline_viewport: str = "desktop",
+    cells_spec: list[tuple[str, list[tuple[str, bool, bool]]]],
+    # cells_spec: list of (file, [(compared_viewport, verdict_changed, matcher_changed), ...])
+) -> Path:
+    cells_payload = []
+    for i, (jf, compared) in enumerate(cells_spec):
+        compared_payload = []
+        for j, (vp, vchanged, mchanged) in enumerate(compared):
+            diff_dirname = f"diff-base{i}-vs-cmp{i}{j}"
+            (suite_dir / diff_dirname).mkdir(exist_ok=True)
+            compared_payload.append({
+                "viewport": vp,
+                "run_id": f"cmp-{i}-{j}",
+                "verdict": "UNCLEAR" if vchanged else "PASS",
+                "matcher": "y" if mchanged else "x",
+                "verdict_changed": vchanged,
+                "matcher_changed": mchanged,
+                "first_divergence_kind": "action",
+                "first_divergence_step": 1,
+                "added_findings": 0,
+                "removed_findings": 0,
+                "diff_dir": diff_dirname,
+                "diff_href": f"{diff_dirname}/diff.html",
+            })
+        cells_payload.append({
+            "file": jf,
+            "persona": "fresh",
+            "baseline": {"viewport": baseline_viewport, "run_id": f"base-{i}",
+                         "verdict": "PASS", "matcher": "x"},
+            "compared": compared_payload,
+        })
+    sd_path = suite_dir / "suite-diff-result.json"
+    sd_path.write_text(json.dumps({
+        "schema": "webwitness/suite-diff/v1",
+        "suite_id": suite_dir.name.removeprefix("suite-"),
+        "baseline_viewport": baseline_viewport,
+        "cells": cells_payload,
+    }), encoding="utf-8")
+    return sd_path
+
+
+def test_suite_diff_badge_absent_without_file(tmp_path: Path):
+    _write_suite_run(tmp_path, "20260425T100000Z", "site", "https://s.com/",
+                     [("j.json", "fresh", "PASS")])
+    payload = _index_payload(tmp_path)
+    assert payload["suites"][0]["suite_diff"] is None
+
+
+def test_suite_diff_badge_stable(tmp_path: Path):
+    suite_dir = _write_suite_run(tmp_path, "20260425T110000Z", "s", "https://s.com/",
+                                 [("j.json", "fresh", "PASS")])
+    _write_suite_diff_result(suite_dir, cells_spec=[
+        ("j.json", [("mobile", False, False), ("tablet", False, False)]),
+    ])
+    payload = _index_payload(tmp_path)
+    sd = payload["suites"][0]["suite_diff"]
+    assert sd["compared_total"] == 2
+    assert sd["verdict_changed"] == 0
+    assert sd["matcher_changed"] == 0
+    assert sd["baseline_viewport"] == "desktop"
+    assert sd["first_diff_href"] == "suite-20260425T110000Z/diff-base0-vs-cmp00/diff.html"
+
+
+def test_suite_diff_badge_alert_counts(tmp_path: Path):
+    suite_dir = _write_suite_run(tmp_path, "20260425T120000Z", "s", "https://s.com/",
+                                 [("a.json", "fresh", "PASS"), ("b.json", "fresh", "PASS")])
+    _write_suite_diff_result(suite_dir, cells_spec=[
+        ("a.json", [("mobile", True, False), ("tablet", False, True)]),
+        ("b.json", [("mobile", True, True),  ("tablet", False, False)]),
+    ])
+    payload = _index_payload(tmp_path)
+    sd = payload["suites"][0]["suite_diff"]
+    assert sd["compared_total"] == 4
+    assert sd["verdict_changed"] == 2
+    assert sd["matcher_changed"] == 2
+
+
+def test_suite_diff_badge_malformed_file_treated_as_none(tmp_path: Path):
+    suite_dir = _write_suite_run(tmp_path, "20260425T130000Z", "s", "https://s.com/",
+                                 [("j.json", "fresh", "PASS")])
+    (suite_dir / "suite-diff-result.json").write_text("{not json", encoding="utf-8")
+    payload = _index_payload(tmp_path)
+    assert payload["suites"][0]["suite_diff"] is None
+
+
+def test_suite_diff_badge_empty_cells_treated_as_none(tmp_path: Path):
+    # File present but no compared cells (e.g. single-viewport suite where
+    # the diff was attempted but found nothing to compare against baseline).
+    suite_dir = _write_suite_run(tmp_path, "20260425T140000Z", "s", "https://s.com/",
+                                 [("j.json", "fresh", "PASS")])
+    (suite_dir / "suite-diff-result.json").write_text(json.dumps({
+        "schema": "webwitness/suite-diff/v1",
+        "baseline_viewport": "desktop",
+        "cells": [],
+    }), encoding="utf-8")
+    payload = _index_payload(tmp_path)
+    assert payload["suites"][0]["suite_diff"] is None

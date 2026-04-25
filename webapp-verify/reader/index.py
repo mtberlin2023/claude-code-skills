@@ -134,6 +134,7 @@ def _suite_row(suite_dir: Path) -> dict | None:
         })
 
     suite_id = sr.get("suite_id") or suite_dir.name.removeprefix("suite-")
+    suite_diff = _suite_diff_summary(suite_dir)
     return {
         "suite_id": suite_id,
         "label": label,
@@ -147,6 +148,43 @@ def _suite_row(suite_dir: Path) -> dict | None:
         "personas": personas_seen,
         "viewports": viewports_seen,
         "has_viewports": has_viewports,
+        "suite_diff": suite_diff,
+    }
+
+
+def _suite_diff_summary(suite_dir: Path) -> dict | None:
+    """Read suite-diff-result.json (if present) and return a compact roll-up
+    for the index suite-header badge: how many compared cells flipped verdict,
+    how many compared in total, and the href of the first per-pair diff for
+    a click-through. Returns None when no suite-diff has been run for this
+    suite. Never raises — a malformed file is treated as 'no badge'."""
+    sd_path = suite_dir / "suite-diff-result.json"
+    try:
+        sd = json.loads(sd_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    cells = sd.get("cells") or []
+    verdict_changed = 0
+    matcher_changed = 0
+    compared_total = 0
+    first_diff_href: str | None = None
+    for cell in cells:
+        for cmp in cell.get("compared") or []:
+            compared_total += 1
+            if cmp.get("verdict_changed"):
+                verdict_changed += 1
+            if cmp.get("matcher_changed"):
+                matcher_changed += 1
+            if first_diff_href is None and cmp.get("diff_href"):
+                first_diff_href = f"{suite_dir.name}/{cmp['diff_href']}"
+    if compared_total == 0:
+        return None
+    return {
+        "baseline_viewport": sd.get("baseline_viewport"),
+        "compared_total": compared_total,
+        "verdict_changed": verdict_changed,
+        "matcher_changed": matcher_changed,
+        "first_diff_href": first_diff_href,
     }
 
 
