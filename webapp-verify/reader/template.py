@@ -544,9 +544,9 @@ _INDEX_STYLE = r"""
 .runs-table td.goal-cell { max-width: 520px; }
 .runs-table td.goal-cell .truncate {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 .counts { color: var(--muted); font-family: var(--mono); font-size: 12px; margin-bottom: 6px; }
 .cluster {
@@ -615,8 +615,10 @@ _INDEX_STYLE = r"""
   font-size: 12px;
   color: var(--fg);
   max-width: 360px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  line-height: 1.45;
 }
 .matrix td.cell {
   text-align: center;
@@ -1376,7 +1378,7 @@ _INDEX_JS = r"""
       const fails = c.runs.length - passes;
       const pills = c.runs.map(r => '<a class="pill ' + (r.pass ? 'pass' : 'fail') + '" href="' + escape(r.report_href) + '" title="' + escape(r.date + ' — ' + (r.pass ? 'PASS' : 'FAIL')) + '">' + (r.pass ? '✓' : '✗') + '</a>').join('<span class="arrow">›</span>');
       return '<div class="cluster">'
-        + '<div class="cluster-goal">' + escape(c.goal.length > 120 ? c.goal.slice(0, 117) + '…' : c.goal) + '</div>'
+        + '<div class="cluster-goal">' + escape(c.goal) + '</div>'
         + '<div class="cluster-meta">' + escape(c.host) + ' · ' + c.runs.length + ' runs · ' + passes + ' PASS · ' + fails + ' FAIL</div>'
         + '<div class="trend">' + pills + '</div>'
         + '</div>';
