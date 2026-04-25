@@ -3,7 +3,7 @@
   "intent": "A visitor on a phone needs to find the site owner's contact information (email, phone, or address) as fast as possible. They are not interested in the full site — they just need to reach someone.",
   "persona": "fresh",
   "target": "REPLACE_ME_WITH_TARGET_URL",
-  "allowed_tactics": ["click_nav", "follow_link", "read_content", "scroll"],
+  "allowed_tactics": ["click_nav", "follow_link", "read_content"],
   "success": {
     "shape": "saw_content",
     "required_content": ["@", "mailto:"]
@@ -11,7 +11,8 @@
   "patience": {
     "max_clicks": 4,
     "max_dead_ends": 1,
-    "max_duration_ms": 60000
+    "max_page_wait_ms": 20000,
+    "max_duration_ms": 150000
   },
   "notes": "Template P5-3 — hard cap on patience. Mobile users looking for contact info bail fast. If this takes more than 4 clicks you have a usability problem. Runner should use mobile viewport (375×812) when it lands."
 }

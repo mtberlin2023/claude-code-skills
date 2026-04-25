@@ -3,7 +3,7 @@
   "intent": "A first-time visitor heard about undavos.com from a LinkedIn post and wants to figure out what it is, who it's for, and whether it's worth any more of their attention.",
   "persona": "fresh",
   "target": "https://undavos.com/",
-  "allowed_tactics": ["click_nav", "click_cta", "follow_link", "read_content", "scroll"],
+  "allowed_tactics": ["click_nav", "click_cta", "follow_link", "read_content"],
   "success": {
     "shape": "saw_content",
     "required_content": ["what we do", "who it's for"]
@@ -11,7 +11,8 @@
   "patience": {
     "max_clicks": 6,
     "max_dead_ends": 2,
-    "max_duration_ms": 60000
+    "max_page_wait_ms": 30000,
+    "max_duration_ms": 180000
   },
-  "notes": "v0.3 alpha acceptance test. fresh persona means in-browser state is empty; only the LLM framing differs. If this UNCLEARs, that's the actual UX signal — a fresh visitor couldn't find positioning content within 6 clicks."
+  "notes": "v0.3 alpha acceptance test. fresh persona means in-browser state is empty; only the LLM framing differs. Patience: max_page_wait_ms 30s reflects how long a real fresh visitor would wait on page (cold-start + clicks); max_duration_ms 180s is a wall backstop absorbing Haiku selector latency (~15s/call)."
 }

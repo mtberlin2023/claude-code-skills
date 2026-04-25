@@ -29,20 +29,31 @@ ALLOWED_TACTICS: frozenset[str] = frozenset({
 TACTICS_OFF_BY_DEFAULT: frozenset[str] = frozenset({"fill_form", "submit"})
 
 DEFAULT_ALLOWED_TACTICS: list[str] = [
-    "click_nav", "click_cta", "follow_link", "read_content", "scroll",
+    "click_nav", "click_cta", "follow_link", "read_content",
+    # `scroll` deliberately NOT in default. chrome-devtools-mcp's
+    # take_snapshot returns the full a11y tree regardless of viewport
+    # position — scroll has no observable effect, and including it
+    # invites repeat-scroll dead-end loops (observed undavos mobile-
+    # contact run, 2026-04-25). Journeys that legitimately need scroll
+    # tracking must opt in explicitly.
 ]
 
 ALLOWED_SUCCESS_SHAPES: frozenset[str] = frozenset({
-    "landed_on", "saw_content", "reached_goal",
+    "landed_on", "saw_content", "reached_goal", "llm_judged",
 })
 
 DEFAULT_PATIENCE = {
     "max_clicks": 8,
     "max_dead_ends": 3,
-    # 90s default. chrome-devtools-mcp cold-start nav alone burns ~19s,
-    # leaving the prior 45s default structurally tight (observed undavos
-    # acceptance, 2026-04-24).
-    "max_duration_ms": 90000,
+    # Two clocks. max_page_wait_ms = user-perceived friction (sums only
+    # MCP dispatch + snapshot time). max_duration_ms = hard wall backstop
+    # including selector latency and our overhead. Whichever fires first
+    # wins. Default page_wait 30s reflects "would a real user have given
+    # up by now?"; default duration 180s absorbs Haiku selector latency
+    # without prematurely capping (observed undavos acceptance run hit
+    # 73s wall on a journey that spent <30s waiting on the page itself).
+    "max_page_wait_ms": 30000,
+    "max_duration_ms": 180000,
 }
 
 
@@ -149,12 +160,19 @@ def load_journey(path: Path, allow_high_entropy: bool = False) -> dict:
                 f"success.shape={shape!r} requires success.required_content "
                 f"(non-empty list) or success.landmark (object)"
             )
+    if shape == "llm_judged":
+        criterion = success.get("criterion")
+        if not isinstance(criterion, str) or not criterion.strip():
+            raise JourneyRefusedError(
+                "success.shape='llm_judged' requires success.criterion "
+                "(non-empty prose describing what 'success' means for the journey)"
+            )
 
     patience = dict(DEFAULT_PATIENCE)
     user_patience = journey.get("patience") or {}
     if not isinstance(user_patience, dict):
         raise JourneyRefusedError("'patience' must be an object")
-    for k in ("max_clicks", "max_dead_ends", "max_duration_ms"):
+    for k in ("max_clicks", "max_dead_ends", "max_duration_ms", "max_page_wait_ms"):
         if k in user_patience:
             v = user_patience[k]
             if not isinstance(v, int) or v <= 0:

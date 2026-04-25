@@ -158,6 +158,130 @@ def _parse_decision(raw: str) -> dict:
     return out
 
 
+def _build_judge_prompt(
+    *,
+    intent: str,
+    criterion: str,
+    persona_framing: str,
+    target_url: str,
+    decisions: list[dict],
+    final_snapshot_text: str,
+) -> str:
+    """Prompt for the post-loop semantic judge. Asks Haiku to grade the
+    journey against the criterion, returning {met, evidence, why_not}."""
+    snap = final_snapshot_text
+    if len(snap) > MAX_SNAPSHOT_CHARS:
+        snap = snap[:MAX_SNAPSHOT_CHARS] + f"\n…[snapshot truncated, {len(final_snapshot_text) - MAX_SNAPSHOT_CHARS} more chars]"
+    decision_lines = []
+    for i, d in enumerate(decisions, start=1):
+        decision_lines.append(
+            f"  step {i}: {d.get('action')} target={d.get('target_name', '')!r} "
+            f"rationale={d.get('rationale', '')!r}"
+        )
+    history_block = "\n".join(decision_lines) if decision_lines else "  (no actions taken)"
+    return f"""You are a strict but fair judge for a website-design review tool. A simulated user just ran a journey on a site. Your job is to grade whether the success criterion was met, based on the final page state and the actions the user took.
+
+PERSONA FRAMING:
+{persona_framing}
+
+INTENT:
+{intent}
+
+SUCCESS CRITERION (what counts as having succeeded):
+{criterion}
+
+FINAL URL: {target_url}
+
+ACTIONS TAKEN:
+{history_block}
+
+FINAL PAGE (accessibility tree, truncated):
+```
+{snap}
+```
+
+Grade the journey strictly against the criterion. Be specific in your evidence — quote actual content from the snapshot, not generic claims. Do not invent content that isn't in the snapshot. If the criterion is partially met, that's a "met=false" with a clear "why_not" explaining what was missing.
+
+OUTPUT FORMAT (strict JSON, no markdown, no prose, no code fences):
+{{
+  "met": true | false,
+  "evidence": "<one or two sentences quoting specific snapshot content that supports your verdict>",
+  "why_not": "<if met=false, one short sentence on what's missing; empty string if met=true>"
+}}
+""".rstrip() + "\n"
+
+
+def _parse_judgment(raw: str) -> dict:
+    text = _strip_code_fences(raw)
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as e:
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if not m:
+            raise SelectorError(f"judge returned no JSON object; raw={raw!r}") from e
+        try:
+            obj = json.loads(m.group(0))
+        except json.JSONDecodeError as e2:
+            raise SelectorError(f"judge JSON parse failed: {e2}; raw={raw!r}") from e2
+    if not isinstance(obj, dict):
+        raise SelectorError(f"judge returned non-object JSON: {obj!r}")
+    if not isinstance(obj.get("met"), bool):
+        raise SelectorError(f"judge.met must be bool; got {obj.get('met')!r}")
+    return {
+        "met": obj["met"],
+        "evidence": str(obj.get("evidence", "")).strip(),
+        "why_not": str(obj.get("why_not", "")).strip(),
+    }
+
+
+def judge_journey(
+    *,
+    intent: str,
+    criterion: str,
+    persona_framing: str,
+    target_url: str,
+    decisions: list[dict],
+    final_snapshot_text: str,
+    model: str = DEFAULT_MODEL,
+    timeout_s: int = DEFAULT_TIMEOUT_S,
+) -> dict:
+    """Post-loop semantic judge for shape='llm_judged' journeys. Returns
+    {met: bool, evidence: str, why_not: str}."""
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        raise SelectorError(
+            "`claude` CLI not on PATH — judge requires Claude Code installed."
+        )
+    prompt = _build_judge_prompt(
+        intent=intent,
+        criterion=criterion,
+        persona_framing=persona_framing,
+        target_url=target_url,
+        decisions=decisions,
+        final_snapshot_text=final_snapshot_text,
+    )
+    cmd = [claude_bin, "--print", "--model", model]
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env={k: v for k, v in os.environ.items() if k in {
+                "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "USER",
+                "ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME",
+            }},
+        )
+    except subprocess.TimeoutExpired as e:
+        raise SelectorError(f"judge timed out after {timeout_s}s") from e
+    if proc.returncode != 0:
+        raise SelectorError(
+            f"`claude --print` exited {proc.returncode}: stderr={proc.stderr.strip()[:500]!r}"
+        )
+    return _parse_judgment(proc.stdout)
+
+
 def select_next(
     *,
     intent: str,

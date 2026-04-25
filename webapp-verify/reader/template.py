@@ -636,6 +636,18 @@ _INDEX_STYLE = r"""
 .matrix .verdict-link.unclear { background: var(--warn); color: #fff; }
 .matrix .verdict-link:hover { outline: 2px solid var(--accent); outline-offset: 1px; text-decoration: none; }
 .matrix .empty-cell { color: var(--muted); font-size: 14px; }
+.alpha-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--warn);
+  color: #fff;
+  font-weight: 600;
+  cursor: help;
+}
 """
 
 
@@ -1307,6 +1319,7 @@ _INDEX_JS = r"""
       + '<div class="suite-head">'
       + '<span class="label">' + escape(s.label) + '</span>'
       + '<span class="target">' + escape(s.target) + '</span>'
+      + '<span class="alpha-badge" title="v0.3 alpha personas: LLM-framing only. Real cookie/storage seeding deferred to v0.4 per BRIEF-032. Persona variants of the same journey may not produce distinct traces.">v0.3α framing-only personas</span>'
       + '<span class="summary">'
       + '<span class="pass">PASS ' + pass + '</span> · '
       + '<span class="unclear">UNCLEAR ' + unclear + '</span> · '

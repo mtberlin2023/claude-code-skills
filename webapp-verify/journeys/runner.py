@@ -156,12 +156,18 @@ async def _run_journey_async(
     dead_ends = 0
     iterations = 0
     run_start = time.perf_counter()
+    # Two clocks: page_wait_ms_used sums only MCP dispatch + snapshot
+    # time (user-perceived friction), excluding selector latency. Wall
+    # is total perf_counter delta. The patience model gates on whichever
+    # cap fires first.
+    page_wait_ms_used = 0
 
     def patience_remaining() -> dict:
         return {
             "clicks": patience["max_clicks"] - clicks_used,
             "dead_ends": patience["max_dead_ends"] - dead_ends,
             "duration_ms": patience["max_duration_ms"] - int((time.perf_counter() - run_start) * 1000),
+            "page_wait_ms": patience.get("max_page_wait_ms", 10**12) - page_wait_ms_used,
         }
 
     def write_decision(d: dict) -> None:
@@ -180,7 +186,9 @@ async def _run_journey_async(
             except Exception as e:  # noqa: BLE001
                 final_error = f"navigate_page: {type(e).__name__}: {e}"
                 raise
-            step_durations_ms.append(int((time.perf_counter() - step_start) * 1000))
+            nav_dur_ms = int((time.perf_counter() - step_start) * 1000)
+            step_durations_ms.append(nav_dur_ms)
+            page_wait_ms_used += nav_dur_ms
             last_navigated_url = journey["target"]
             write_artefact_json(run_dir, "step-01-navigate_page.json", _result_to_dict(raw))
 
@@ -208,7 +216,9 @@ async def _run_journey_async(
                 snap_label = f"step-{len(executed_steps) + 1:02d}-take_snapshot"
                 executed_steps.append({"tool": "take_snapshot"})
                 write_artefact_json(run_dir, f"{snap_label}.json", snap_dict)
-                step_durations_ms.append(int((time.perf_counter() - step_start) * 1000))
+                snap_dur_ms = int((time.perf_counter() - step_start) * 1000)
+                step_durations_ms.append(snap_dur_ms)
+                page_wait_ms_used += snap_dur_ms
 
                 # Success check (before patience check — if we're already
                 # done, don't waste a click budget on it).
@@ -217,6 +227,10 @@ async def _run_journey_async(
                     matcher = fired
                     verdict = VERDICT_PASS
                     break
+
+                # Recompute remaining now that this iteration's snapshot
+                # has been accounted for in page_wait_ms_used.
+                pr = patience_remaining()
 
                 # Patience exhaustion → UNCLEAR. Log the cap event to
                 # decisions.jsonl so the narrative ends on a real entry
@@ -243,13 +257,24 @@ async def _run_journey_async(
                         "observed": "stopped: patience.max_dead_ends reached",
                     })
                     break
+                if "max_page_wait_ms" in patience and pr["page_wait_ms"] <= 0:
+                    verdict = VERDICT_UNCLEAR
+                    matcher = "patience.max_page_wait_ms"
+                    write_decision({
+                        "iter": iterations,
+                        "action": "patience_exhausted",
+                        "rationale": f"max_page_wait_ms budget exhausted ({patience['max_page_wait_ms']}ms cap; {page_wait_ms_used}ms spent waiting on the page)",
+                        "url": last_navigated_url,
+                        "observed": "stopped: patience.max_page_wait_ms reached",
+                    })
+                    break
                 if pr["duration_ms"] <= 0:
                     verdict = VERDICT_UNCLEAR
                     matcher = "patience.max_duration_ms"
                     write_decision({
                         "iter": iterations,
                         "action": "patience_exhausted",
-                        "rationale": f"max_duration_ms budget exhausted ({patience['max_duration_ms']}ms cap)",
+                        "rationale": f"max_duration_ms budget exhausted ({patience['max_duration_ms']}ms wall cap)",
                         "url": last_navigated_url,
                         "observed": "stopped: patience.max_duration_ms reached",
                     })
@@ -391,7 +416,9 @@ async def _run_journey_async(
                     suffix = "" if len(blobs) == 1 else f"-{chr(ord('a') + j)}"
                     ext = _ext_for_mime(mime)
                     write_artefact_bytes(run_dir, f"{step_label}{suffix}{ext}", data)
-                step_durations_ms.append(int((time.perf_counter() - step_start) * 1000))
+                click_dur_ms = int((time.perf_counter() - step_start) * 1000)
+                step_durations_ms.append(click_dur_ms)
+                page_wait_ms_used += click_dur_ms
 
                 # Observation: did the click change anything?
                 observed = "url_unchanged"
@@ -433,6 +460,71 @@ async def _run_journey_async(
 
     duration_ms = int((time.perf_counter() - run_start) * 1000)
 
+    # Post-loop semantic judge for shape='llm_judged' journeys. Runs
+    # ONLY if we exited the loop without a literal-matcher PASS — the
+    # judge's job is to grade the journey against a prose criterion
+    # when the runner can't decide via string/landmark matchers alone.
+    judgment: dict | None = None
+    if (
+        journey["success"].get("shape") == "llm_judged"
+        and verdict != VERDICT_PASS
+        and snapshot_result is not None
+        and final_error is None
+    ):
+        try:
+            judgment = selector_mod.judge_journey(
+                intent=journey["intent"],
+                criterion=journey["success"]["criterion"],
+                persona_framing=persona.get("llm_framing", ""),
+                target_url=last_navigated_url or journey["target"],
+                decisions=decisions,
+                final_snapshot_text=last_snapshot_text,
+            )
+            if judgment["met"]:
+                verdict = VERDICT_PASS
+                matcher = "llm_judged"
+        except selector_mod.SelectorError as e:
+            # Judge call failed — leave the loop's verdict in place,
+            # but record the error so the report can show it.
+            judgment = {"met": False, "evidence": "", "why_not": f"judge error: {e}"}
+
+    # Synthetic finding: contact-lookup-style journey UNCLEARed AND the
+    # final snapshot has no email-shape or mailto: content. Naive `@`
+    # substring is unsafe because URLs (e.g. youtube.com/embed?key=@...)
+    # also contain `@` — we require an actual `name@domain.tld` shape or
+    # a `mailto:` link before claiming the page has reachable contact.
+    findings: list[dict] = []
+    if (
+        verdict == VERDICT_UNCLEAR
+        and isinstance(journey["success"].get("required_content"), list)
+        and last_snapshot_text
+    ):
+        import re as _re
+        rc = journey["success"]["required_content"]
+        contact_needles = {n for n in rc if n in {"@", "mailto:"} or "@" in n}
+        if contact_needles:
+            email_shape = _re.search(
+                r"[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+",
+                last_snapshot_text,
+                _re.IGNORECASE,
+            )
+            mailto_shape = "mailto:" in last_snapshot_text.lower()
+            if not (email_shape or mailto_shape):
+                findings.append({
+                    "rule_id": "no-contact-reachable",
+                    "severity": "warn",
+                    "description": (
+                        "Site has no contact-shape content (email address, "
+                        "mailto: link) reachable in the rendered DOM after "
+                        "the simulated user exhausted their patience budget. "
+                        f"Looked for: {sorted(contact_needles)}."
+                    ),
+                    "node_repr": f"final URL: {last_navigated_url}",
+                })
+
+    if findings:
+        write_artefact_json(run_dir, "findings.json", {"findings": findings})
+
     # Synthesise flow.json + result.json for reader compat.
     synthetic_flow = _make_synthetic_flow(journey, executed_steps)
     write_artefact_json(run_dir, "flow.json", synthetic_flow)
@@ -450,10 +542,13 @@ async def _run_journey_async(
         "steps_total": len(executed_steps),
         "step_durations_ms": step_durations_ms,
         "duration_ms": duration_ms,
+        "page_wait_ms_used": page_wait_ms_used,
         "iterations": iterations,
         "clicks_used": clicks_used,
         "dead_ends": dead_ends,
         "patience_budget": patience,
+        "judgment": judgment,
+        "findings": findings,
         "error": final_error,
         "_journey": True,
     }

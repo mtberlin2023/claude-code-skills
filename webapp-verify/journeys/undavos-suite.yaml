@@ -15,3 +15,6 @@ journeys:
   # Same mobile journey but as an "engaged lead" persona.
   - file: templates/mobile-contact-lookup.json
     persona: engaged
+  # llm_judged variant of acceptance — Haiku grades the journey against a
+  # prose criterion instead of literal phrase matchers.
+  - file: acceptance-undavos-llm-judged.json
