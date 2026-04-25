@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>P8.5 synthetic banner fixture — webwitness dismiss_consent live-trigger test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 24px; color: #222; line-height: 1.6; }
+    h1 { font-size: 28px; margin-bottom: 8px; }
+    .subtitle { color: #666; margin-bottom: 24px; }
+    article { background: #f6f6f6; padding: 24px; border-radius: 8px; }
+    article h2 { font-size: 18px; margin-top: 0; }
+    .hidden-content { display: none; padding: 16px; background: #eef; border-radius: 6px; margin-top: 16px; }
+    .hidden-content.revealed { display: block; }
+    /* The banner — fixed bottom, blocks page interactions visually but not DOM access. */
+    .consent-banner {
+      position: fixed; left: 0; right: 0; bottom: 0;
+      background: #1a1a1a; color: #fff;
+      padding: 20px 24px;
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      box-shadow: 0 -4px 16px rgba(0,0,0,0.3);
+      z-index: 9999;
+    }
+    .consent-banner.dismissed { display: none; }
+    .consent-banner .text { flex: 1; min-width: 240px; }
+    .consent-banner button {
+      padding: 10px 18px; border: none; border-radius: 4px;
+      font-weight: 600; cursor: pointer; font-size: 14px;
+    }
+    .consent-banner .accept { background: #2ea043; color: #fff; }
+    .consent-banner .reject { background: #444; color: #fff; }
+    .consent-banner .manage { background: transparent; color: #ccc; text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>About webwitness P8.5</h1>
+    <p class="subtitle">A synthetic fixture used to validate the dismiss_consent live-trigger leg in a controlled environment.</p>
+  </header>
+
+  <article>
+    <h2>Why this fixture exists</h2>
+    <p>Six wild targets (undavos.com, termly.io, theguardian.com, zeit.de, bbc.com, cookiebot.com) all failed to surface a blocking consent modal in a chrome-devtools-mcp accessibility-tree snapshot. Either CMP scripts detect automation and skip injection, or the modal renders in a top-layer / shadow-DOM that the snapshot does not traverse.</p>
+    <p>This page eliminates both confounds: the banner is a plain visible &lt;div&gt; element with standard ARIA roles, served from localhost. If the LLM still does not pick the dismiss_consent tactic against this fixture, the bug is in the substrate, not the wild-target environment.</p>
+
+    <div id="article-body" class="hidden-content">
+      <h3>The actual article body — only revealed once the banner is dismissed</h3>
+      <p>This paragraph contains the success-criterion phrase: <strong>quokka safari handbook</strong>. The webwitness journey requires this exact phrase before declaring PASS, so the LLM cannot match on header copy or marketing text — it must dismiss the banner first to make this content visible.</p>
+    </div>
+  </article>
+
+  <div class="consent-banner" role="dialog" aria-modal="true" aria-label="Cookie consent">
+    <div class="text">
+      We use cookies to analyse traffic and remember your preferences. Please accept or reject before continuing to read.
+    </div>
+    <button class="accept" type="button" aria-label="Accept all cookies">Accept all</button>
+    <button class="reject" type="button" aria-label="Reject all cookies">Reject all</button>
+    <button class="manage" type="button" aria-label="Manage cookie preferences">Manage</button>
+  </div>
+
+  <script>
+    // Dismissing via any of the three buttons reveals the article body.
+    const banner = document.querySelector('.consent-banner');
+    const body = document.getElementById('article-body');
+    document.querySelectorAll('.consent-banner button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        banner.classList.add('dismissed');
+        body.classList.add('revealed');
+      });
+    });
+  </script>
+</body>
+</html>
