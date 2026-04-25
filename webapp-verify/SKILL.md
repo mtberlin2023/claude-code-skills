@@ -1,6 +1,6 @@
 ---
 name: webapp-verify
-status: v1 behavioural — awaiting Anya line-level re-pass before first real flow invocation
+status: v0.3.1 shipped — journey runner + site health matrix + regression alerts live; v0.3α persona seeding (LLM-framing only) — real cookie/storage seeding deferred to v0.4 per BRIEF-032
 substrate: chrome-devtools-mcp (npm, unscoped)
 runtime_dep: mcp == 1.27.0 (hash-pinned in install.sh)
 parent_brief: _shared/briefs/BRIEF-028-webapp-verify-token-efficient-testing.md
@@ -9,9 +9,15 @@ panel_synthesis: _shared/briefs/BRIEF-028-webapp-verify-PANEL-SYNTHESIS.md
 
 # webapp-verify
 
-> A subprocess wrapper around Chrome DevTools MCP that runs a scripted flow against a live URL and writes verification artefacts to disk. Honesty-first: this tool runs a flow — it does not tell you whether your UX is good.
+> A subprocess wrapper around Chrome DevTools MCP that drives a live URL via either a deterministic flow script (v1) or an LLM-in-loop journey (v0.3+) and writes verification artefacts to disk. Honesty-first: this tool runs a flow or journey — it does not tell you whether your UX is good.
 
-**Status:** v1 behavioural. CLI surface + allowlist + deny-list + `emulate` parameter-gate + `--audit-mode` flag + SSRF static gate + flow-script entropy scanner + substrate-audit PII mitigations all live. Single runtime dep: `mcp` Python SDK, hash-pinned. 83/83 fixture tests green. Non-negotiable gate before first real `verify.py <flow.json>` invocation: Anya [MT-GQ02] line-level re-pass on the async session wrappers + new SSRF/entropy fixtures.
+**Status:** v0.3.1. Two complementary modes ship in this skill:
+
+- **Flow mode (v1):** deterministic scripted steps with a `goal` + `success_state` detector. Refuses to run without both. PASS / FAIL / refuse semantics.
+- **Journey mode (v0.3+):** persona + intent + `success` shape (`saw_content` / `clicked_target` / `llm_judged`). Claude Haiku picks each next action from the live a11y tree; per-iteration decisions log to `decisions.jsonl`; PASS / UNCLEAR / FAIL semantics with a patience budget that surfaces real friction signals. Suite mode (`journey-suite <site.yaml>`) runs N journeys against one target; diff mode (`journey-diff <run_a> <run_b>`) is the v1.0 P3 regression-alerts substrate.
+- **Reader:** every run dir gets a self-contained `report.html`; the artefacts root grows an `index.html` that surfaces flat runs, suite matrices (journeys × personas), and diff dirs alongside each other.
+
+223 tests green. Single runtime dep: `mcp` Python SDK, hash-pinned. v0.2 line-level Anya pass cleared. Live smoke validated against undavos.com (calibration session 2026-04-25 surfaced four real signals: tooling overhead in patience budgets, brittle literal-string matchers, dead-end scroll loops, and a synthetic `no-contact-reachable` finding for missing reachable contact info).
 
 **Install:** `bash install.sh` from this directory. Verify with `verify.py --check-install`.
 
@@ -65,17 +71,33 @@ The `take_snapshot` tool in Chrome DevTools MCP returns accessibility-tree data.
 
 ---
 
-## CLI surface (v1)
+## CLI surface
+
+### Flow mode (v1 — deterministic)
 
 ```
 verify.py <flow-script.json>                                   # run a flow
-verify.py <flow-script.json> --allow-high-entropy              # opt into high-entropy flow fields (UUIDs, hashes)
+verify.py flow <flow-script.json> --allow-high-entropy         # opt into high-entropy flow fields (UUIDs, hashes)
 verify.py --audit-mode <url> --confirm-substrate-audit         # dump substrate shape (×3 viewports, PII-gated)
 verify.py --list-allowlist                                     # print full gate surface
 verify.py --check-install                                      # verify SDK version + chrome-devtools-mcp reachable
 ```
 
+### Journey mode (v0.3+ — LLM-in-loop)
+
+```
+verify.py journey <journey.json>                                # run one persona+intent journey
+verify.py journey-suite <site.yaml>                             # run N journeys against one target (P7: × M viewports)
+verify.py journey-diff <run_a_dir> <run_b_dir>                  # P3 regression alerts: walk both runs step-by-step
+verify.py suite-diff <suite_dir> [--baseline <viewport>]        # auto-pair every (file × persona) cell across viewports
+verify.py expand "<prose>" --target <url> [--persona-hint id]   # P1 natural-language → schema-valid journey.json
+```
+
 `--audit-mode` writes snapshot/network/console dumps to `artefacts/substrate-audit/<date>/`. It is **PII-gated**: requires `--confirm-substrate-audit` on the CLI *and* an interactive `y/N` prompt. Use it to inspect what the substrate returns (schema discovery, new CDP MCP version check), not as a general-purpose run.
+
+`journey-diff` writes `diff-result.json` (schema `webwitness/diff/v1`) plus a self-contained `diff.html` showing both runs side-by-side, the merged step table with the first divergence outlined in red, and a findings diff (added findings highlighted yellow, removed findings struck through). Default output dir: `artefacts/diff-<runA>-vs-<runB>/`.
+
+`suite-diff` runs over a P7 suite (one with a `viewports:` axis in site.yaml). It groups journey rows by `(file, persona)`, picks a baseline viewport (first one in suite.yaml order, override with `--baseline`), and emits a per-pair `diff-<runA>-vs-<runB>/` for each non-baseline cell plus a `suite-diff-result.json` roll-up. The reader's Diffs panel auto-discovers the per-pair dirs — no extra wiring. Returns exit 0 only if every compared cell is verdict-stable across viewports.
 
 **Forced server-start flags (non-negotiable):**
 
@@ -94,12 +116,13 @@ verify.py --check-install                                      # verify SDK vers
 
 ---
 
-## Allowlist (8 tools)
+## Allowlist (9 tools)
 
 | Tool | Category | Purpose |
 |---|---|---|
 | `navigate_page` | Navigation | URL navigation |
 | `click` | Input | Element click |
+| `fill` | Input | Single-field text entry |
 | `type_text` | Input | Keyboard input |
 | `fill_form` | Input | Multi-field form submission |
 | `take_snapshot` | Debugging | Accessibility-tree snapshot |
@@ -163,21 +186,40 @@ Unexpected parameters (not in the 6-key list) are rejected unconditionally. Reje
 
 ```
 artefacts/
-  <run-id>/                           # one dir per run, run-id = UTC-ISO timestamp
-    flow.json                         # copy of the flow script
-    result.json                       # pass/fail + which success_state matcher fired
-    dispatcher.log                    # emulate-parameter rejections, denied-tool attempts
+  <run-id>/                            # flow run — UTC-ISO timestamp
+    flow.json                          # copy of the flow script
+    result.json                        # pass/fail + which success_state matcher fired
+    dispatcher.log                     # emulate-parameter rejections, denied-tool attempts
     viewport-<N>/
       snapshot.json
       network.json
       console.json
       screenshot.png
+  <run-id>/                            # journey run — same UTC-ISO format
+    journey.json                       # copy of the journey (with _resolved persona)
+    decisions.jsonl                    # one line per LLM iteration (action + rationale + observed)
+    step-NN-<action>.json              # per-step MCP call payload + result
+    final-snapshot.json                # last a11y snapshot when the loop terminated
+    findings.json                      # synthetic findings (e.g. no-contact-reachable)
+    flow.json                          # synthesised flow shape for reader compat
+    result.json                        # PASS/UNCLEAR/FAIL + matcher + patience usage + judgment
+    report.html                        # self-contained per-run reader page
+  suite-<id>/                          # journey-suite run
+    suite.json                         # copy of the site.yaml as JSON
+    suite-result.json                  # roll-up: site + per-journey verdict rows + duration_ms
+    <run-id-1>/                        # one journey-run subdir per row (same shape as above)
+    <run-id-2>/
+    ...
+  diff-<runA>-vs-<runB>/               # journey-diff output
+    diff-result.json                   # schema webwitness/diff/v1
+    diff.html                          # rendered diff page
   substrate-audit/
     YYYY-MM-DD/
-      <viewport>.json                 # snapshot + network + console, one per viewport
+      <viewport>.json                  # snapshot + network + console, one per viewport
+  index.html                           # multi-run index — flat runs + suite matrices + diffs panel
 ```
 
-Main-session stdout hard-caps at 3 lines: a verdict + a one-line counter + an artefact path. No JSON, no tracebacks, no screenshots inline.
+Main-session stdout hard-caps at a small, predictable surface: a verdict line, an artefact-path line, and (for journey/diff modes) a reader-path line. No JSON, no tracebacks, no screenshots inline.
 
 ---
 
@@ -195,15 +237,35 @@ Main-session stdout hard-caps at 3 lines: a verdict + a one-line counter + an ar
 
 ## Follow-up tasks
 
+### v1 (flow mode) — shipped
 1. ✅ Skeleton on disk
-2. ✅ Parameter-gated `emulate` dispatcher + 28-shape smuggling fixture (tests 1-28)
-3. ✅ Flow-script loader with refuse-to-run gate + SSRF gate + entropy scanner (tests 1-37)
+2. ✅ Parameter-gated `emulate` dispatcher + smuggling fixture
+3. ✅ Flow-script loader with refuse-to-run gate + SSRF gate + entropy scanner
 4. ✅ Three-line output ceiling + artefacts writer (chmod 0o600/0o700)
 5. ✅ MCP Python SDK pinned + hash-verified install.sh
 6. ✅ Async session wrapper + dispatch_step + run_flow + run_audit_mode
-7. ⏳ First `--audit-mode` dump against a known URL (Principal: target `https://example.com/`)
-8. ⏳ Anya [MT-GQ02] full line-level re-pass on async wrappers + SSRF/entropy fixtures (non-negotiable before first real flow-run)
-9. ◻ Publish-to-`claude-code-skills` decision (deferred from panel synthesis until v1 is usable internally)
+7. ✅ `--audit-mode` dumps against known URL; substrate shape locked
+8. ✅ Anya line-level re-pass on async wrappers + SSRF/entropy fixtures
+
+### v0.3+ (journey mode) — shipped
+9. ✅ J1 `journey.json` primitive + schema (`webwitness/journey/v0.3`)
+10. ✅ J2 persona seeding (alpha — LLM framing only; v0.4 unblocks real cookie/storage seeding per BRIEF-032)
+11. ✅ J3 LLM-in-loop selector via `claude --print` shell-out
+12. ✅ J4 patience budgets (`max_clicks` / `max_dead_ends` / `max_page_wait_ms` / `max_duration_ms`)
+13. ✅ J5 journey-suite (site.yaml shape + sequential runner)
+14. ✅ J6 `final-snapshot.json` + `findings.json` (synthetic `no-contact-reachable` rule)
+15. ✅ P1 natural-language journey expander (`verify.py expand`)
+16. ✅ P2 site health matrix on the index (journeys × personas)
+17. ✅ P3 regression alerts (`verify.py journey-diff`)
+18. ✅ P4 client-facing review-mode toggle + brand slot
+19. ✅ P5 template library (four curated journey templates in `journeys/templates/`)
+20. ✅ Reader narrative polish — `patience_exhausted` renders as a labelled terminal step
+
+### Open
+21. ⏳ P7 device/viewport matrix (wrap `run_journey` × `{desktop, tablet, mobile}`)
+22. ⏳ P8 consent / cookie banner primitive
+23. ⏳ BRIEF-032 unblock — real persona seeding (cookie/storage/referrer); unblocks P6 persona-vs-persona diff. Scheduled cloud routine `trig_014gVeVsq5oJpDmY6hNKNmk1` checks status 2026-05-08.
+24. ◻ Publish-to-`claude-code-skills` decision (deferred from panel synthesis until v1 is usable internally — now usable; revisit)
 
 ---
 

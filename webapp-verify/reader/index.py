@@ -21,6 +21,7 @@ def generate(artefacts_root: Path) -> Path:
 
     runs = []
     suites = []
+    diffs = []
     for d in sorted(artefacts_root.iterdir(), reverse=True):
         if not d.is_dir():
             continue
@@ -29,6 +30,12 @@ def generate(artefacts_root: Path) -> Path:
             suite_row = _suite_row(d)
             if suite_row:
                 suites.append(suite_row)
+            continue
+        diff_result_path = d / "diff-result.json"
+        if diff_result_path.exists() and d.name.startswith("diff-"):
+            diff_row = _diff_row(d)
+            if diff_row:
+                diffs.append(diff_row)
             continue
         result_path = d / "result.json"
         flow_path = d / "flow.json"
@@ -41,7 +48,7 @@ def generate(artefacts_root: Path) -> Path:
             continue
         runs.append(_row(d, result, flow))
 
-    payload = {"runs": runs, "suites": suites, "count": len(runs)}
+    payload = {"runs": runs, "suites": suites, "diffs": diffs, "count": len(runs)}
     from .template import render_index
     html_out = render_index(payload)
     out_path = artefacts_root / "index.html"
@@ -89,6 +96,8 @@ def _suite_row(suite_dir: Path) -> dict | None:
     journey_rows: list[dict] = []
     personas_seen: list[str] = []
     files_seen: list[str] = []
+    viewports_seen: list[str] = []
+    has_viewports = False
     for jr in sr.get("journeys") or []:
         run_id = jr.get("run_id") or ""
         # The journey runner wrote into suite-<id>/<run_id>/.
@@ -100,6 +109,12 @@ def _suite_row(suite_dir: Path) -> dict | None:
         )
         f = jr.get("file") or "?"
         persona = jr.get("persona") or "—"
+        viewport = jr.get("viewport") or None
+        viewport_label = (viewport or {}).get("label", "") if viewport else ""
+        if viewport:
+            has_viewports = True
+            if viewport_label not in viewports_seen:
+                viewports_seen.append(viewport_label)
         if persona not in personas_seen:
             personas_seen.append(persona)
         if f not in files_seen:
@@ -108,6 +123,7 @@ def _suite_row(suite_dir: Path) -> dict | None:
             "file": f,
             "persona": persona,
             "persona_override": jr.get("persona_override"),
+            "viewport": viewport_label,
             "intent": jr.get("intent") or "",
             "verdict": jr.get("verdict") or "FAIL",
             "matcher": jr.get("matcher"),
@@ -129,6 +145,44 @@ def _suite_row(suite_dir: Path) -> dict | None:
         "journeys": journey_rows,
         "files": files_seen,
         "personas": personas_seen,
+        "viewports": viewports_seen,
+        "has_viewports": has_viewports,
+    }
+
+
+def _diff_row(diff_dir: Path) -> dict | None:
+    """Build the index payload entry for a diff-<A>-vs-<B>/ directory.
+
+    Reads diff-result.json and surfaces the headline divergence + verdict
+    delta. Returns None if diff-result.json is missing/malformed."""
+    dr_path = diff_dir / "diff-result.json"
+    try:
+        dr = json.loads(dr_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    a = dr.get("run_a") or {}
+    b = dr.get("run_b") or {}
+    fd = dr.get("first_divergence") or {}
+    fdiff = dr.get("findings_diff") or {}
+    diff_id = dr.get("diff_id") or diff_dir.name.removeprefix("diff-")
+    has_html = (diff_dir / "diff.html").exists()
+    return {
+        "diff_id": diff_id,
+        "date": _run_id_to_date(a.get("run_id") or ""),
+        "run_a_id": a.get("run_id") or "",
+        "run_b_id": b.get("run_id") or "",
+        "verdict_a": a.get("verdict") or "—",
+        "verdict_b": b.get("verdict") or "—",
+        "verdict_changed": bool(dr.get("verdict_changed")),
+        "matcher_changed": bool(dr.get("matcher_changed")),
+        "first_divergence_kind": fd.get("kind") or "none",
+        "first_divergence_step": fd.get("step_index"),
+        "added_findings": len(fdiff.get("added") or []),
+        "removed_findings": len(fdiff.get("removed") or []),
+        "diff_href": (
+            f"{diff_dir.name}/diff.html" if has_html else f"{diff_dir.name}/"
+        ),
     }
 
 

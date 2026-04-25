@@ -182,7 +182,7 @@ def _fake_runner_factory(verdicts: list[str]):
     verdicts in order, one per call."""
     calls = {"i": 0}
 
-    def fake_run_journey(journey, run_id=None, artefacts_root=None):
+    def fake_run_journey(journey, run_id=None, artefacts_root=None, viewport=None):
         v = verdicts[calls["i"]]
         calls["i"] += 1
         run_id = run_id or f"fake-{calls['i']}"
@@ -196,6 +196,7 @@ def _fake_runner_factory(verdicts: list[str]):
             "clicks_used": 1,
             "dead_ends": 0,
             "duration_ms": 100,
+            "viewport": viewport,
             "artefacts_dir": str((artefacts_root or Path("/tmp")) / run_id),
             "error": None,
             "pass": v == "PASS",
@@ -253,3 +254,153 @@ def test_run_suite_all_pass_returns_clean_summary(tmp_path: Path, monkeypatch):
 
     result = run_suite(suite)
     assert result["verdict_summary"] == {"PASS": 1, "FAIL": 0, "UNCLEAR": 0}
+
+
+# ─── P7: viewport axis ─────────────────────────────────────────────────────
+
+
+def test_suite_without_viewports_is_unaffected(tmp_path: Path):
+    j1 = _write_journey(tmp_path, "j1.json")
+    p = _write_suite(tmp_path, "no-vp.yaml", {
+        "target": "https://e.com/",
+        "journeys": [{"file": j1.name}],
+    })
+    suite = load_suite(p)
+    assert suite["viewports"] is None
+    plans = suite_mod.expand_rows(suite)
+    assert len(plans) == 1
+    assert plans[0]["viewport"] is None
+
+
+def test_suite_level_viewports_expand_rows(tmp_path: Path):
+    j1 = _write_journey(tmp_path, "j1.json")
+    j2 = _write_journey(tmp_path, "j2.json", intent="Other intent")
+    p = _write_suite(tmp_path, "vp.yaml", {
+        "target": "https://e.com/",
+        "viewports": [
+            {"label": "desktop", "width": 1280, "height": 800},
+            {"label": "mobile", "width": 375, "height": 667},
+        ],
+        "journeys": [{"file": j1.name}, {"file": j2.name}],
+    })
+    suite = load_suite(p)
+    assert len(suite["viewports"]) == 2
+    plans = suite_mod.expand_rows(suite)
+    # 2 journeys × 2 viewports = 4 plans.
+    assert len(plans) == 4
+    labels = [(plan["row"]["file"], plan["viewport"]["label"]) for plan in plans]
+    assert labels == [
+        ("j1.json", "desktop"), ("j1.json", "mobile"),
+        ("j2.json", "desktop"), ("j2.json", "mobile"),
+    ]
+
+
+def test_per_row_viewports_override_site_level(tmp_path: Path):
+    j1 = _write_journey(tmp_path, "j1.json")
+    j2 = _write_journey(tmp_path, "j2.json")
+    p = _write_suite(tmp_path, "mixed.yaml", {
+        "target": "https://e.com/",
+        "viewports": [{"label": "desktop", "width": 1280, "height": 800}],
+        "journeys": [
+            {"file": j1.name},  # uses site-level (desktop only)
+            {"file": j2.name, "viewports": [
+                {"label": "mobile", "width": 375, "height": 667},
+                {"label": "tablet", "width": 768, "height": 1024},
+            ]},
+        ],
+    })
+    suite = load_suite(p)
+    plans = suite_mod.expand_rows(suite)
+    assert len(plans) == 3  # 1 + 2
+    assert plans[0]["viewport"]["label"] == "desktop"
+    assert plans[1]["viewport"]["label"] == "mobile"
+    assert plans[2]["viewport"]["label"] == "tablet"
+
+
+def test_viewports_validation_rejects_non_list(tmp_path: Path):
+    j1 = _write_journey(tmp_path, "j1.json")
+    p = _write_suite(tmp_path, "bad.yaml", {
+        "target": "https://e.com/",
+        "viewports": "desktop",
+        "journeys": [{"file": j1.name}],
+    })
+    with pytest.raises(SuiteRefusedError, match="non-empty list"):
+        load_suite(p)
+
+
+def test_viewports_validation_rejects_missing_dimensions(tmp_path: Path):
+    j1 = _write_journey(tmp_path, "j1.json")
+    p = _write_suite(tmp_path, "bad.yaml", {
+        "target": "https://e.com/",
+        "viewports": [{"label": "x", "width": 100}],  # no height
+        "journeys": [{"file": j1.name}],
+    })
+    with pytest.raises(SuiteRefusedError, match="height"):
+        load_suite(p)
+
+
+def test_viewports_validation_rejects_duplicate_labels(tmp_path: Path):
+    j1 = _write_journey(tmp_path, "j1.json")
+    p = _write_suite(tmp_path, "bad.yaml", {
+        "target": "https://e.com/",
+        "viewports": [
+            {"label": "x", "width": 100, "height": 100},
+            {"label": "x", "width": 200, "height": 200},
+        ],
+        "journeys": [{"file": j1.name}],
+    })
+    with pytest.raises(SuiteRefusedError, match="duplicated"):
+        load_suite(p)
+
+
+def test_run_suite_passes_viewport_to_runner_and_records_in_row(
+    tmp_path: Path, monkeypatch,
+):
+    j1 = _write_journey(tmp_path, "j1.json")
+    p = _write_suite(tmp_path, "vp.yaml", {
+        "target": "https://e.com/",
+        "viewports": [
+            {"label": "desktop", "width": 1280, "height": 800},
+            {"label": "mobile", "width": 375, "height": 667},
+        ],
+        "journeys": [{"file": j1.name}],
+    })
+    suite = load_suite(p)
+
+    import verify
+    monkeypatch.setattr(verify, "ARTEFACTS_ROOT", tmp_path / "artefacts")
+
+    seen_viewports: list[dict | None] = []
+
+    def capturing_runner(journey, run_id=None, artefacts_root=None, viewport=None):
+        seen_viewports.append(viewport)
+        return {
+            "run_id": run_id or "x",
+            "verdict": "PASS",
+            "matcher": "fake",
+            "iterations": 1,
+            "clicks_used": 0,
+            "dead_ends": 0,
+            "duration_ms": 1,
+            "viewport": viewport,
+            "artefacts_dir": str((artefacts_root or Path("/tmp")) / (run_id or "x")),
+            "error": None,
+            "pass": True,
+        }
+
+    monkeypatch.setattr(suite_mod, "run_journey", capturing_runner)
+
+    result = run_suite(suite)
+    # Runner saw both viewports.
+    assert [v["label"] for v in seen_viewports] == ["desktop", "mobile"]
+    # suite-result rows carry the viewport.
+    assert [row["viewport"]["label"] for row in result["journeys"]] == ["desktop", "mobile"]
+
+
+def test_run_journey_accepts_viewport_kwarg():
+    """Smoke: run_journey signature accepts viewport= without exploding.
+    Doesn't actually run — just verifies the kwarg is in the signature."""
+    import inspect
+    from journeys.runner import run_journey
+    sig = inspect.signature(run_journey)
+    assert "viewport" in sig.parameters

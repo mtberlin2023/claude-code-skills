@@ -165,3 +165,87 @@ def test_suite_dir_without_marker_is_ignored(tmp_path: Path):
     (odd / "suite-result.json").write_text("{}", encoding="utf-8")
     payload = _index_payload(tmp_path)
     assert payload["suites"] == []
+
+
+# ─── diff dirs (P3) ────────────────────────────────────────────────────────
+
+
+def _write_diff_dir(
+    root: Path,
+    diff_id: str,
+    *,
+    run_a_id: str = "20260425T070000Z",
+    run_b_id: str = "20260425T080000Z",
+    verdict_a: str = "PASS",
+    verdict_b: str = "UNCLEAR",
+    first_kind: str = "action",
+    first_step: int | None = 1,
+    has_html: bool = True,
+) -> Path:
+    diff_dir = root / f"diff-{diff_id}"
+    diff_dir.mkdir(parents=True)
+    payload = {
+        "schema": "webwitness/diff/v1",
+        "diff_id": diff_id,
+        "generated_at": "2026-04-25T10:00:00Z",
+        "run_a": {"run_id": run_a_id, "verdict": verdict_a, "matcher": "x"},
+        "run_b": {"run_id": run_b_id, "verdict": verdict_b, "matcher": "y"},
+        "verdict_changed": verdict_a != verdict_b,
+        "matcher_changed": True,
+        "first_divergence": {"step_index": first_step, "kind": first_kind},
+        "step_table": [],
+        "findings_diff": {"added": [{"rule_id": "x"}], "removed": [], "shared": []},
+    }
+    (diff_dir / "diff-result.json").write_text(json.dumps(payload), encoding="utf-8")
+    if has_html:
+        (diff_dir / "diff.html").write_text("<html>stub</html>", encoding="utf-8")
+    return diff_dir
+
+
+def test_diff_dir_detected(tmp_path: Path):
+    _write_diff_dir(tmp_path, "A-vs-B")
+    payload = _index_payload(tmp_path)
+    assert payload["runs"] == []
+    assert payload["suites"] == []
+    assert len(payload["diffs"]) == 1
+    d = payload["diffs"][0]
+    assert d["diff_id"] == "A-vs-B"
+    assert d["verdict_changed"] is True
+    assert d["first_divergence_kind"] == "action"
+    assert d["first_divergence_step"] == 1
+    assert d["added_findings"] == 1
+    assert d["diff_href"] == "diff-A-vs-B/diff.html"
+
+
+def test_diff_dir_without_html_falls_back_to_dir(tmp_path: Path):
+    _write_diff_dir(tmp_path, "A-vs-B", has_html=False)
+    payload = _index_payload(tmp_path)
+    assert payload["diffs"][0]["diff_href"] == "diff-A-vs-B/"
+
+
+def test_diff_dir_without_marker_is_ignored(tmp_path: Path):
+    # Dir name doesn't start with `diff-` — defensive against rogue files.
+    odd = tmp_path / "weirdo"
+    odd.mkdir()
+    (odd / "diff-result.json").write_text("{}", encoding="utf-8")
+    payload = _index_payload(tmp_path)
+    assert payload["diffs"] == []
+
+
+def test_diffs_runs_suites_coexist(tmp_path: Path):
+    _write_flat_run(tmp_path, "20260425T070000Z", "https://e.com/", "g1", True)
+    _write_suite_run(tmp_path, "20260425T080000Z", "site", "https://site.com/",
+                     [("j1.json", "fresh", "PASS")])
+    _write_diff_dir(tmp_path, "A-vs-B")
+    payload = _index_payload(tmp_path)
+    assert len(payload["runs"]) == 1
+    assert len(payload["suites"]) == 1
+    assert len(payload["diffs"]) == 1
+
+
+def test_malformed_diff_result_skipped(tmp_path: Path):
+    diff_dir = tmp_path / "diff-broken"
+    diff_dir.mkdir()
+    (diff_dir / "diff-result.json").write_text("{not json", encoding="utf-8")
+    payload = _index_payload(tmp_path)
+    assert payload["diffs"] == []

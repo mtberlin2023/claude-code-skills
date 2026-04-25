@@ -1571,7 +1571,7 @@ def main() -> int:
     # If argv[1] doesn't match a known subcommand or top-level flag, treat
     # it as a flow path and inject `flow` for the parser. Subcommands are
     # `flow` (default) and `journey` (v0.3 LLM-in-loop runner).
-    KNOWN_SUBCMDS = {"flow", "journey", "journey-suite", "expand"}
+    KNOWN_SUBCMDS = {"flow", "journey", "journey-suite", "journey-diff", "suite-diff", "expand"}
     TOP_LEVEL_FLAGS = {
         "--audit-mode", "--list-allowlist", "--check-install",
         "-h", "--help",
@@ -1631,6 +1631,31 @@ def main() -> int:
                      help="Skip top-level index.html regeneration.")
     s_p.set_defaults(report=True, index=True)
 
+    d_p = sub.add_parser(
+        "journey-diff",
+        help="Diff two single-journey runs step-by-step (v1.0 P3 regression alerts).",
+    )
+    d_p.add_argument("run_a", help="Path to the first journey run dir (baseline).")
+    d_p.add_argument("run_b", help="Path to the second journey run dir (candidate).")
+    d_p.add_argument("--out", default=None, metavar="PATH",
+                     help="Output dir for diff-result.json + diff.html. Default: artefacts/diff-<A>-vs-<B>/.")
+    d_p.add_argument("--no-report", action="store_false", dest="report",
+                     help="Skip diff.html generation (only emit diff-result.json).")
+    d_p.add_argument("--no-index", action="store_false", dest="index",
+                     help="Skip top-level index.html regeneration.")
+    d_p.set_defaults(report=True, index=True)
+
+    sd_p = sub.add_parser(
+        "suite-diff",
+        help="Diff every (file × persona) cell across viewports in a P7 suite run.",
+    )
+    sd_p.add_argument("suite_dir", help="Path to a suite-<id>/ artefacts directory.")
+    sd_p.add_argument("--baseline", default=None, metavar="VIEWPORT",
+                      help="Baseline viewport label (default: first viewport in site.yaml order).")
+    sd_p.add_argument("--no-index", action="store_false", dest="index",
+                      help="Skip top-level index.html regeneration.")
+    sd_p.set_defaults(index=True)
+
     e_p = sub.add_parser("expand", help="Expand prose into a journey JSON via LLM (v1.0 P1).")
     e_p.add_argument("prose", nargs="?", default=None,
                      help="Natural-language description of the journey. Use - to read from stdin.")
@@ -1664,6 +1689,10 @@ def main() -> int:
         return _main_journey(args)
     if args.cmd == "journey-suite":
         return _main_journey_suite(args)
+    if args.cmd == "journey-diff":
+        return _main_journey_diff(args)
+    if args.cmd == "suite-diff":
+        return _main_suite_diff(args)
     if args.cmd == "expand":
         return _main_expand(args)
 
@@ -1767,6 +1796,121 @@ def _main_journey_suite(args) -> int:
 
     # Suite passes only if every journey passed.
     return 0 if summary.get("FAIL", 0) == 0 and summary.get("UNCLEAR", 0) == 0 else 1
+
+
+def _main_journey_diff(args) -> int:
+    from journeys.diff import (
+        DiffError,
+        default_out_dir,
+        diff_runs,
+        write_diff,
+    )
+
+    run_a = Path(args.run_a)
+    run_b = Path(args.run_b)
+    for label, p in (("run_a", run_a), ("run_b", run_b)):
+        if not p.is_dir():
+            print(f"journey-diff: {label} is not a directory: {p}", file=sys.stderr)
+            return 1
+
+    try:
+        payload = diff_runs(run_a, run_b)
+    except DiffError as e:
+        print(f"journey-diff failed: {e}", file=sys.stderr)
+        return 1
+
+    if args.out:
+        out_dir = Path(args.out)
+    else:
+        out_dir = default_out_dir(
+            ARTEFACTS_ROOT,
+            payload["run_a"]["run_id"] or run_a.name,
+            payload["run_b"]["run_id"] or run_b.name,
+        )
+
+    diff_path = write_diff(payload, out_dir)
+
+    fd = payload.get("first_divergence") or {}
+    kind = fd.get("kind") or "none"
+    idx = fd.get("step_index")
+    n_added = len((payload.get("findings_diff") or {}).get("added") or [])
+    n_removed = len((payload.get("findings_diff") or {}).get("removed") or [])
+    print(
+        f"Diff {payload['run_a']['run_id']} → {payload['run_b']['run_id']}: "
+        f"first_divergence={kind}"
+        + (f" @step {idx}" if idx else "")
+        + (f", verdict {payload['run_a']['verdict']}→{payload['run_b']['verdict']}"
+           if payload.get("verdict_changed") else "")
+        + (f", findings +{n_added}/-{n_removed}" if (n_added or n_removed) else "")
+    )
+    print(f"  diff-result: {diff_path}")
+
+    if args.report:
+        try:
+            from reader.diff_report import generate as generate_diff_html
+            html_path = generate_diff_html(out_dir)
+            print(f"  diff.html:   {html_path}")
+        except Exception as e:
+            print(f"[reader] diff render failed: {e}", file=sys.stderr)
+        if args.index:
+            try:
+                from reader.index import generate as generate_index
+                index_path = generate_index(ARTEFACTS_ROOT)
+                print(f"  Index:       {index_path}")
+            except Exception as e:
+                print(f"[reader] index generation failed: {e}", file=sys.stderr)
+
+    # Exit code: 0 if sequences match exactly AND verdicts match; otherwise 1.
+    if kind == "none" and not payload.get("verdict_changed") and not payload.get("matcher_changed"):
+        return 0
+    return 1
+
+
+def _main_suite_diff(args) -> int:
+    from journeys.diff import (
+        DiffError,
+        diff_suite_viewports,
+        write_suite_diff,
+    )
+
+    suite_dir = Path(args.suite_dir)
+    if not suite_dir.is_dir():
+        print(f"suite-diff: not a directory: {suite_dir}", file=sys.stderr)
+        return 1
+
+    try:
+        payload = diff_suite_viewports(suite_dir, baseline_viewport=args.baseline)
+    except DiffError as e:
+        print(f"suite-diff failed: {e}", file=sys.stderr)
+        return 1
+
+    out_path = write_suite_diff(payload, suite_dir)
+
+    n_cells = len(payload["cells"])
+    diffs_emitted = sum(len(c.get("compared", [])) for c in payload["cells"])
+    verdict_changed = sum(
+        1
+        for c in payload["cells"]
+        for cmp in c.get("compared", [])
+        if cmp.get("verdict_changed")
+    )
+    print(
+        f"Suite diff {payload['suite_id']}: baseline={payload['baseline_viewport']}, "
+        f"{n_cells} cells, {diffs_emitted} per-pair diffs"
+        + (f", {verdict_changed} verdict-changed" if verdict_changed else "")
+    )
+    print(f"  roll-up: {out_path}")
+
+    if args.index:
+        try:
+            from reader.index import generate as generate_index
+            index_path = generate_index(ARTEFACTS_ROOT)
+            print(f"  Index:   {index_path}")
+        except Exception as e:
+            print(f"[reader] index generation failed: {e}", file=sys.stderr)
+
+    # Exit code: 0 if every compared cell was verdict-stable; 1 otherwise.
+    return 0 if verdict_changed == 0 else 1
 
 
 def _slugify_for_filename(text: str, max_len: int = 40) -> str:

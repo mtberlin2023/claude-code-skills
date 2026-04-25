@@ -121,3 +121,41 @@ def test_journey_without_patience_block_inherits_both_clocks(tmp_path: Path):
     j = load_journey(p)
     assert "max_page_wait_ms" in j["_resolved"]["patience"]
     assert "max_duration_ms" in j["_resolved"]["patience"]
+
+
+# ─── dismiss_consent tactic (P8) ────────────────────────────────────────
+
+
+def test_dismiss_consent_in_default_tactics():
+    assert "dismiss_consent" in DEFAULT_ALLOWED_TACTICS
+
+
+def test_dismiss_consent_resolves_for_default_journey(tmp_path: Path):
+    p = _write_journey(tmp_path)
+    j = load_journey(p)
+    assert "dismiss_consent" in j["_resolved"]["tactics"]
+
+
+def test_dismiss_consent_can_be_explicitly_listed(tmp_path: Path):
+    p = _write_journey(tmp_path, allowed_tactics=["click_nav", "dismiss_consent"])
+    j = load_journey(p)
+    assert "dismiss_consent" in j["_resolved"]["tactics"]
+    assert "click_nav" in j["_resolved"]["tactics"]
+
+
+def test_dismiss_consent_can_be_forbidden(tmp_path: Path):
+    p = _write_journey(tmp_path, forbidden_tactics=["dismiss_consent"])
+    j = load_journey(p)
+    assert "dismiss_consent" not in j["_resolved"]["tactics"]
+
+
+def test_dismiss_consent_recognised_by_selector_decision_set():
+    from journeys.selector import DECISION_ACTIONS, TACTICS_NEED_TARGET
+    assert "dismiss_consent" in DECISION_ACTIONS
+    assert "dismiss_consent" in TACTICS_NEED_TARGET  # needs role+name like a click
+
+
+def test_dismiss_consent_mapped_to_click_in_runner():
+    from journeys.runner import ACTION_TO_TOOL, PATIENCE_FREE_TACTICS
+    assert ACTION_TO_TOOL.get("dismiss_consent") == "click"
+    assert "dismiss_consent" in PATIENCE_FREE_TACTICS

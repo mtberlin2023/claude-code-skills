@@ -47,6 +47,16 @@ from .runner import run_journey  # noqa: E402
 
 SUITE_SCHEMA = "webwitness/site/v0.3"
 
+# Standard device profiles surfaced as a v1.0 P7 default. site.yaml may
+# omit the `viewports:` block entirely (no axis applied), pass a custom
+# list, or override per row. Dimensions match the three audit-mode
+# viewports already in verify.py — keeps device parity with --audit-mode.
+STANDARD_VIEWPORTS: list[dict] = [
+    {"label": "desktop", "width": 1280, "height": 800},
+    {"label": "tablet", "width": 768, "height": 1024},
+    {"label": "mobile", "width": 375, "height": 667},
+]
+
 
 class SuiteRefusedError(ValueError):
     """Raised when a site.yaml fails validation."""
@@ -101,6 +111,8 @@ def load_suite(path: Path, allow_high_entropy: bool = False) -> dict:
     label = raw.get("label")
     if label is not None and not isinstance(label, str):
         raise SuiteRefusedError("'label' must be a string if present")
+
+    site_viewports = _resolve_viewports(raw.get("viewports"), where="suite")
 
     journeys_raw = raw.get("journeys")
     if not isinstance(journeys_raw, list) or not journeys_raw:
@@ -179,11 +191,18 @@ def load_suite(path: Path, allow_high_entropy: bool = False) -> dict:
             except OSError:
                 pass
 
+        row_viewports = _resolve_viewports(
+            row.get("viewports"), where=f"journeys[{i}]",
+        )
+
         resolved_rows.append({
             "file": f,
             "_path": jp,
             "persona_override": persona_override,
             "_journey": journey,
+            # None at this layer means "no per-row override"; suite-level
+            # default (which itself may be None) applies during expansion.
+            "viewports_override": row_viewports,
         })
 
     return {
@@ -192,7 +211,69 @@ def load_suite(path: Path, allow_high_entropy: bool = False) -> dict:
         "target": target,
         "_yaml_path": path,
         "journeys": resolved_rows,
+        "viewports": site_viewports,
     }
+
+
+def _resolve_viewports(raw: object, *, where: str) -> list[dict] | None:
+    """Validate a viewports list and return the normalised form. None means
+    'absent — fall back to the next layer up' (row → site → no axis)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw:
+        raise SuiteRefusedError(
+            f"{where}.viewports must be a non-empty list of "
+            "{label, width, height} mappings"
+        )
+    out: list[dict] = []
+    seen_labels: set[str] = set()
+    for j, vp in enumerate(raw):
+        if not isinstance(vp, dict):
+            raise SuiteRefusedError(
+                f"{where}.viewports[{j}] must be a mapping with label/width/height"
+            )
+        label = vp.get("label")
+        width = vp.get("width")
+        height = vp.get("height")
+        if not isinstance(label, str) or not label.strip():
+            raise SuiteRefusedError(
+                f"{where}.viewports[{j}].label must be a non-empty string"
+            )
+        if not isinstance(width, int) or width <= 0:
+            raise SuiteRefusedError(
+                f"{where}.viewports[{j}].width must be a positive int"
+            )
+        if not isinstance(height, int) or height <= 0:
+            raise SuiteRefusedError(
+                f"{where}.viewports[{j}].height must be a positive int"
+            )
+        if label in seen_labels:
+            raise SuiteRefusedError(
+                f"{where}.viewports[{j}].label '{label}' is duplicated"
+            )
+        seen_labels.add(label)
+        out.append({"label": label, "width": width, "height": height})
+    return out
+
+
+def expand_rows(suite: dict) -> list[dict]:
+    """Expand a resolved suite into a flat list of per-cell run plans.
+
+    Each plan is a dict ``{row, viewport}`` where ``row`` is the original
+    journey row and ``viewport`` is the viewport that should drive that
+    cell (or ``None`` if no axis applies). Precedence: row override →
+    suite-level → no axis.
+    """
+    plans: list[dict] = []
+    site_viewports = suite.get("viewports")
+    for row in suite["journeys"]:
+        row_viewports = row.get("viewports_override") or site_viewports
+        if not row_viewports:
+            plans.append({"row": row, "viewport": None})
+        else:
+            for vp in row_viewports:
+                plans.append({"row": row, "viewport": vp})
+    return plans
 
 
 def run_suite(suite: dict, suite_id: str | None = None) -> dict:
@@ -224,7 +305,9 @@ def run_suite(suite: dict, suite_id: str | None = None) -> dict:
     verdict_summary = {"PASS": 0, "FAIL": 0, "UNCLEAR": 0}
     suite_start = time.perf_counter()
 
-    for row in suite["journeys"]:
+    for plan in expand_rows(suite):
+        row = plan["row"]
+        viewport = plan["viewport"]
         journey = row["_journey"]
         run_id = new_run_id()
         # Make sure run_ids don't collide when journeys run in the same
@@ -237,19 +320,23 @@ def run_suite(suite: dict, suite_id: str | None = None) -> dict:
                 n += 1
             run_id = f"{run_id}-{n}"
 
-        result = run_journey(journey, run_id=run_id, artefacts_root=suite_dir)
+        result = run_journey(
+            journey, run_id=run_id, artefacts_root=suite_dir, viewport=viewport,
+        )
         verdict = result.get("verdict", "FAIL")
         verdict_summary[verdict] = verdict_summary.get(verdict, 0) + 1
         rows_out.append({
             "file": row["file"],
             "persona": journey["persona"],
             "persona_override": row["persona_override"],
+            "viewport": viewport,
             "intent": journey["intent"],
             "run_id": result["run_id"],
             "verdict": verdict,
             "matcher": result.get("matcher"),
             "iterations": result.get("iterations"),
             "clicks_used": result.get("clicks_used"),
+            "consents_dismissed": result.get("consents_dismissed"),
             "dead_ends": result.get("dead_ends"),
             "duration_ms": result.get("duration_ms"),
             "error": result.get("error"),

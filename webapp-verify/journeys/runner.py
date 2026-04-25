@@ -47,9 +47,15 @@ ACTION_TO_TOOL: dict[str, str] = {
     "click_cta": "click",
     "follow_link": "click",
     "use_search": "click",  # alpha: just clicks the searchbox; full fill/submit deferred
+    "dismiss_consent": "click",  # P8: consent banner dismiss; doesn't charge clicks budget
 }
 
 OBSERVATION_ONLY_ACTIONS: frozenset[str] = frozenset({"read_content", "scroll"})
+
+# Tactics whose dispatch is real (DOM mutation + page-wait time) but which
+# should NOT count toward `clicks_used` — they are pre-task friction, not
+# user-engagement progress.
+PATIENCE_FREE_TACTICS: frozenset[str] = frozenset({"dismiss_consent"})
 
 # Verdict shapes for journey runs. PASS = success state met. FAIL = hard
 # error (network, gate refusal). UNCLEAR = patience exhausted or selector
@@ -64,16 +70,22 @@ def run_journey(
     journey: dict,
     run_id: str | None = None,
     artefacts_root: Path | None = None,
+    viewport: dict | None = None,
 ) -> dict:
     """Execute a validated journey (output of journeys.loader.load_journey).
     Returns a result dict in flow-runner shape so the reader can render it.
 
     artefacts_root overrides the default ARTEFACTS_ROOT — used by the
     journey-suite runner to nest per-journey runs inside one suite dir.
+
+    viewport (P7) — optional ``{label, width, height}`` mapping. When set,
+    the runner dispatches ``emulate({viewport: {...}})`` immediately after
+    the MCP session opens and before navigate_page, so the journey runs
+    against the requested device profile.
     """
     if run_id is None:
         run_id = new_run_id()
-    return asyncio.run(_run_journey_async(journey, run_id, artefacts_root))
+    return asyncio.run(_run_journey_async(journey, run_id, artefacts_root, viewport))
 
 
 def _check_success(
@@ -129,7 +141,10 @@ def _make_synthetic_flow(journey: dict, executed_steps: list[dict]) -> dict:
 
 
 async def _run_journey_async(
-    journey: dict, run_id: str, artefacts_root: Path | None = None
+    journey: dict,
+    run_id: str,
+    artefacts_root: Path | None = None,
+    viewport: dict | None = None,
 ) -> dict:
     resolved = journey["_resolved"]
     persona = resolved["persona"]
@@ -153,6 +168,7 @@ async def _run_journey_async(
     last_snapshot_text: str = ""
 
     clicks_used = 0
+    consents_dismissed = 0
     dead_ends = 0
     iterations = 0
     run_start = time.perf_counter()
@@ -177,6 +193,32 @@ async def _run_journey_async(
 
     try:
         async with _mcp_session(errlog_path=server_errlog) as session:
+            # P7: apply viewport via emulate BEFORE navigate so the page
+            # loads at the right size. Mirrors --audit-mode pattern.
+            if viewport is not None:
+                emulate_step = {
+                    "tool": "emulate",
+                    "params": {
+                        "viewport": {
+                            "width": viewport["width"],
+                            "height": viewport["height"],
+                        },
+                    },
+                }
+                try:
+                    await dispatch_step_async(session, emulate_step, {}, [])
+                except Exception as e:  # noqa: BLE001
+                    final_error = f"emulate[viewport={viewport.get('label')}]: {type(e).__name__}: {e}"
+                    write_decision({
+                        "iter": 0,
+                        "action": "viewport_apply",
+                        "rationale": f"set viewport to {viewport.get('label')} "
+                                     f"({viewport['width']}x{viewport['height']})",
+                        "url": journey["target"],
+                        "observed": f"emulate failed: {final_error}",
+                    })
+                    raise
+
             # Step 0 — navigate to target.
             nav_step = {"tool": "navigate_page", "url": journey["target"]}
             executed_steps.append(nav_step)
@@ -407,7 +449,10 @@ async def _run_journey_async(
                         "observed": f"dispatch failed: {final_error}",
                     })
                     break
-                clicks_used += 1
+                if action in PATIENCE_FREE_TACTICS:
+                    consents_dismissed += 1
+                else:
+                    clicks_used += 1
                 step_label = f"step-{len(executed_steps) + 1:02d}-{tool}"
                 executed_steps.append(resolved_step)
                 write_artefact_json(run_dir, f"{step_label}.json", _result_to_dict(raw))
@@ -545,7 +590,9 @@ async def _run_journey_async(
         "page_wait_ms_used": page_wait_ms_used,
         "iterations": iterations,
         "clicks_used": clicks_used,
+        "consents_dismissed": consents_dismissed,
         "dead_ends": dead_ends,
+        "viewport": viewport,
         "patience_budget": patience,
         "judgment": judgment,
         "findings": findings,

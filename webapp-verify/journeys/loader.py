@@ -23,6 +23,7 @@ PERSONAS_PATH = _HERE / "personas.json"
 ALLOWED_TACTICS: frozenset[str] = frozenset({
     "click_nav", "click_cta", "follow_link", "use_search",
     "read_content", "fill_form", "submit", "go_back", "scroll",
+    "dismiss_consent",
 })
 
 # Tactics off by default (require explicit allowed_tactics entry).
@@ -30,6 +31,12 @@ TACTICS_OFF_BY_DEFAULT: frozenset[str] = frozenset({"fill_form", "submit"})
 
 DEFAULT_ALLOWED_TACTICS: list[str] = [
     "click_nav", "click_cta", "follow_link", "read_content",
+    # `dismiss_consent` is default-on (added 2026-04-25 P8). Consent
+    # banners are universal pre-task friction; making every journey
+    # opt in would be tedious. The runner deliberately does NOT charge
+    # consent dismissals to `clicks_used` — they're not user-task
+    # progress, they're GDPR-shaped overhead.
+    "dismiss_consent",
     # `scroll` deliberately NOT in default. chrome-devtools-mcp's
     # take_snapshot returns the full a11y tree regardless of viewport
     # position — scroll has no observable effect, and including it

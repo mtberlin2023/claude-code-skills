@@ -234,6 +234,33 @@ a:hover { text-decoration: underline; }
 .narr-rat { color: var(--fg); margin-top: 4px; font-style: italic; }
 .narr-obs { color: var(--muted); margin-top: 3px; font-family: var(--mono); font-size: 12px; }
 .narr-foot { color: var(--muted); font-size: 11px; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border); font-style: italic; }
+.narr-step--patience {
+  border-left-color: var(--fail);
+  background: var(--rem-bg);
+  margin-top: 10px;
+}
+.narr-step--patience::before { color: var(--fail); font-weight: 700; }
+.narr-step--patience .narr-tag {
+  background: transparent;
+  color: var(--fail);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.narr-step--patience .narr-rat,
+.narr-step--patience .narr-obs { color: var(--fg); }
+.narr-stop-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--fail);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-right: 8px;
+}
 .timeline { font-family: var(--mono); font-size: 13px; }
 .timeline .row {
   display: grid;
@@ -650,6 +677,61 @@ _INDEX_STYLE = r"""
   font-weight: 600;
   cursor: help;
 }
+.viewport-axis-badge {
+  display: inline-block;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--info);
+  color: #fff;
+  font-weight: 600;
+  cursor: help;
+}
+.viewport-pill {
+  display: inline-block;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--info);
+  border: 1px solid var(--info);
+  margin-left: 8px;
+  font-weight: 600;
+}
+.diffs-panel {
+  margin-top: 14px;
+  padding: 16px 20px;
+  background: var(--panel-2);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.diffs-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.diffs-head .label { font-weight: 600; font-size: 14px; }
+.diffs-head .tagline { color: var(--muted); font-size: 12px; }
+.diffs-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.diffs-table th,
+.diffs-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.diffs-table th {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
 """
 
 
@@ -735,9 +817,20 @@ _REPORT_JS = r"""
     const target = d.journey.target || '';
     const items = d.narrative.map(step => {
       const tag = step.action || '?';
+      const isPatience = tag === 'patience_exhausted';
       const targetName = step.target_name ? ' "' + escape(step.target_name) + '"' : '';
       const observed = step.observed ? '<div class="narr-obs">→ ' + escape(step.observed) + '</div>' : '';
       const rationale = step.rationale ? '<div class="narr-rat">' + escape(step.rationale) + '</div>' : '';
+      if (isPatience) {
+        return '<li class="narr-step narr-step--patience">'
+          + '<div class="narr-head">'
+          + '<span class="narr-stop-pill">STOPPED</span>'
+          + '<span class="narr-tag">patience exhausted</span>'
+          + '</div>'
+          + rationale
+          + observed
+          + '</li>';
+      }
       return '<li class="narr-step"><div class="narr-head"><span class="narr-tag">' + escape(tag) + '</span>' + targetName + '</div>' + rationale + observed + '</li>';
     }).join('');
     const verdict = d.result.verdict || (d.result.pass ? 'PASS' : 'FAIL');
@@ -1276,22 +1369,57 @@ _INDEX_JS = r"""
   function redraw() {
     const runs = filtered();
     const suites = filteredSuites();
+    const diffs = (DATA.diffs || []);
     const body = document.getElementById('view-body');
     const suiteHtml = (suites || []).map(renderSuite).join('');
+    const diffHtml = diffs.length ? renderDiffsPanel(diffs) : '';
     let runsHtml;
     if (prefs.view === 'clustered') {
       runsHtml = renderClusters(runs);
     } else {
       runsHtml = renderTable(runs);
     }
-    body.innerHTML = suiteHtml + runsHtml;
+    body.innerHTML = suiteHtml + diffHtml + runsHtml;
     const totalSuites = (DATA.suites || []).length;
     const totalRuns = (DATA.runs || []).length;
+    const totalDiffs = diffs.length;
     let counts = runs.length + ' of ' + totalRuns + ' runs shown';
     if (totalSuites) {
       counts = (suites || []).length + ' of ' + totalSuites + ' suites · ' + counts;
     }
+    if (totalDiffs) {
+      counts = totalDiffs + ' diff' + (totalDiffs === 1 ? '' : 's') + ' · ' + counts;
+    }
     document.getElementById('counts').textContent = counts;
+  }
+
+  function renderDiffsPanel(diffs) {
+    const rows = diffs.map(d => {
+      const kind = d.first_divergence_kind || 'none';
+      const kindLabel = kind === 'none'
+        ? 'identical'
+        : (kind === 'matcher_only' ? 'verdict only' : (kind + (d.first_divergence_step ? ' @' + d.first_divergence_step : '')));
+      const verdictDelta = d.verdict_changed
+        ? escape(d.verdict_a) + ' → ' + escape(d.verdict_b)
+        : escape(d.verdict_a);
+      const findingsDelta = (d.added_findings || d.removed_findings)
+        ? '+' + d.added_findings + ' / -' + d.removed_findings
+        : '—';
+      return '<tr>'
+        + '<td><span style="font-family:var(--mono);font-size:12px">' + escape(d.date) + '</span></td>'
+        + '<td style="font-family:var(--mono);font-size:12px">' + escape(d.run_a_id) + ' → ' + escape(d.run_b_id) + '</td>'
+        + '<td>' + escape(kindLabel) + '</td>'
+        + '<td>' + verdictDelta + '</td>'
+        + '<td>' + findingsDelta + '</td>'
+        + '<td><a href="' + escape(d.diff_href) + '">open →</a></td>'
+        + '</tr>';
+    }).join('');
+    return '<div class="diffs-panel">'
+      + '<div class="diffs-head"><span class="label">Diffs</span><span class="tagline">regression alerts</span></div>'
+      + '<table class="diffs-table"><thead><tr>'
+      + '<th>Generated</th><th>A → B</th><th>First divergence</th><th>Verdict</th><th>Findings ±</th><th>Open</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>'
+      + '</div>';
   }
 
   function renderSuite(s) {
@@ -1301,27 +1429,42 @@ _INDEX_JS = r"""
     const fail = sum.FAIL || 0;
     const personas = s.personas || [];
     const files = s.files || [];
-    // Index journeys by file × persona for fast cell lookup.
+    const viewports = s.viewports || [];
+    const hasViewports = !!s.has_viewports && viewports.length > 0;
+    // P7: when the suite has a viewport axis, rows are (file, viewport)
+    // pairs; otherwise rows are just files (legacy shape). Index cells
+    // by `file|viewport|persona` so multi-viewport suites don't collide.
     const cells = {};
     (s.journeys || []).forEach(j => {
-      cells[j.file + '|' + j.persona] = j;
+      const vp = j.viewport || '';
+      cells[j.file + '|' + vp + '|' + j.persona] = j;
     });
     const headerCols = personas.map(p => '<th class="persona-col">' + escape(p) + '</th>').join('');
-    const rows = files.map(f => {
+    const rowKeys = hasViewports
+      ? files.flatMap(f => viewports.map(vp => ({file: f, viewport: vp})))
+      : files.map(f => ({file: f, viewport: ''}));
+    const rows = rowKeys.map(rk => {
       const cellHtml = personas.map(p => {
-        const j = cells[f + '|' + p];
+        const j = cells[rk.file + '|' + rk.viewport + '|' + p];
         if (!j) return '<td class="cell empty-cell">—</td>';
         const cls = j.verdict === 'PASS' ? 'pass' : j.verdict === 'UNCLEAR' ? 'unclear' : 'fail';
         const tip = (j.matcher || '') + ' · ' + (j.duration_ms || 0) + 'ms';
         return '<td class="cell"><a class="verdict-link ' + cls + '" href="' + escape(j.report_href) + '" title="' + escape(tip) + '">' + escape(j.verdict) + '</a></td>';
       }).join('');
-      return '<tr><td class="file-cell">' + escape(f) + '</td>' + cellHtml + '</tr>';
+      const fileLabel = hasViewports
+        ? escape(rk.file) + ' <span class="viewport-pill">' + escape(rk.viewport) + '</span>'
+        : escape(rk.file);
+      return '<tr><td class="file-cell">' + fileLabel + '</td>' + cellHtml + '</tr>';
     }).join('');
+    const viewportBadge = hasViewports
+      ? '<span class="viewport-axis-badge" title="P7 device matrix: each journey runs once per viewport. Cells link to per-(journey × persona × viewport) report.">' + viewports.length + ' viewports</span>'
+      : '';
     return '<div class="suite">'
       + '<div class="suite-head">'
       + '<span class="label">' + escape(s.label) + '</span>'
       + '<span class="target">' + escape(s.target) + '</span>'
       + '<span class="alpha-badge" title="v0.3 alpha personas: LLM-framing only. Real cookie/storage seeding deferred to v0.4 per BRIEF-032. Persona variants of the same journey may not produce distinct traces.">v0.3α framing-only personas</span>'
+      + viewportBadge
       + '<span class="summary">'
       + '<span class="pass">PASS ' + pass + '</span> · '
       + '<span class="unclear">UNCLEAR ' + unclear + '</span> · '

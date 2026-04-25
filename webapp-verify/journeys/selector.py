@@ -20,12 +20,14 @@ from typing import Any
 # into MCP tool calls (or treats `done`/`give_up` as terminal).
 DECISION_ACTIONS: frozenset[str] = frozenset({
     "click_nav", "click_cta", "follow_link", "use_search", "read_content",
-    "fill_form", "submit", "go_back", "scroll", "done", "give_up",
+    "fill_form", "submit", "go_back", "scroll", "dismiss_consent",
+    "done", "give_up",
 })
 
 # Tactics that need an element target (role + name).
 TACTICS_NEED_TARGET: frozenset[str] = frozenset({
-    "click_nav", "click_cta", "follow_link", "use_search", "fill_form", "submit",
+    "click_nav", "click_cta", "follow_link", "use_search",
+    "fill_form", "submit", "dismiss_consent",
 })
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
@@ -81,6 +83,7 @@ Tactic semantics:
 - use_search: locate the search box, fill it, submit
 - read_content: take no action — just observe the current page (use this if the page itself answers the intent)
 - scroll: scroll down to see more (no element target needed)
+- dismiss_consent: click an Accept / Reject / Dismiss button on a cookie / privacy / consent banner — pre-task friction; the persona framing decides whether to accept or reject. Pick this BEFORE click_nav / click_cta when a consent banner is visible — banner content typically blocks interaction with the rest of the page.
 - go_back: browser back
 - done: success — the intent has been met by what you can see now
 - give_up: this user would abandon the journey at this point
