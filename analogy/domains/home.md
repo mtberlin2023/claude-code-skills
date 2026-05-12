@@ -8,11 +8,11 @@
 
 | Concept | Home term | Use when |
 |---|---|---|
-| Principal | Head of household | The one who has to actually live with the call |
+| User | Head of household | The one who has to actually live with the call |
 | Expert (any tier) | A trade you call in (plumber, electrician, accountant) | One narrow job; doesn't run the house |
 | Meta-expert | Interior architect / financial advisor | Sets layout/structure; doesn't live there |
 | Adversarial reviewer | House survey / energy assessor / nosy neighbour | Outside eyes that catch what habit normalised |
-| Subagent (Haiku/Sonnet) | Cleaner / babysitter / part-time help | Owns one chore window; doesn't decide |
+| Subagent | Cleaner / babysitter / part-time help | Owns one chore window; doesn't decide |
 | Domain expert | Specialist (lawyer for a will, surveyor for a survey) | Called for one specific question |
 | Sub-expert pair | Two opinions on the same renovation | Deliberately differing views on the same call |
 
@@ -25,7 +25,7 @@
 | Instinct file | "How this house runs" — routines | What happens automatically without anyone calling it |
 | Notepad / reflex bank | Fridge note / shared family chat | Reminders that catch you mid-day |
 | Working memory (post-/dream) | "Remember when X happened" stories | The vivid lessons the household holds in eyeline |
-| Hook (Claude Code) | Direct debit / scheduled bill / smoke alarm | Fires automatically without anyone deciding each time |
+| Hook | Direct debit / scheduled bill / smoke alarm | Fires automatically without anyone deciding each time |
 | MCP server | The pantry / supplies cupboard / loft | Where stored things are pulled from; not refilled in real time |
 | Knowledge pack | Family recipe book / household manual | The how-we-do-it for one class of task |
 | Skill | A learned domestic skill (cooking, DIY, parenting) | Portable across rooms and life-stages |

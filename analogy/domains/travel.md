@@ -8,11 +8,11 @@
 
 | Concept | Travel term | Use when |
 |---|---|---|
-| Principal | The traveller | The one whose journey it is; holds the ticket and the consequences |
+| User | The traveller | The one whose journey it is; holds the ticket and the consequences |
 | Expert (any tier) | A gatekeeper at one checkpoint (gate agent, immigration officer, check-in) | Owns one stage; can stop you, can't see the rest of the journey |
 | Meta-expert | Travel planner / corporate-travel desk | Designs the itinerary; doesn't show up at the gate |
 | Adversarial reviewer | Security / customs officer | Catches what the check-in waved through |
-| Subagent (Haiku/Sonnet) | Bag handler / driver / porter | Moves things; doesn't decide where they go |
+| Subagent | Bag handler / driver / porter | Moves things; doesn't decide where they go |
 | Domain expert | Visa specialist / immigration lawyer | One narrow rules question, deep expertise |
 | Sub-expert pair | Codeshare partners / two airlines on a connection | Two parties responsible for adjacent legs of the same journey |
 
@@ -25,7 +25,7 @@
 | Instinct file | "How I travel" — packing habits, queue choices | What fires automatically without conscious thought |
 | Notepad / reflex bank | The itinerary in your pocket | Reminders that catch you between legs |
 | Working memory (post-/dream) | Frequent-flyer history; remembered shortcuts | What you bring forward from previous trips |
-| Hook (Claude Code) | Boarding call / gate change announcement / TSA Pre-check lane | Fires automatically on a known trigger |
+| Hook | Boarding call / gate change announcement / TSA Pre-check lane | Fires automatically on a known trigger |
 | MCP server | The duty-free shop / lounge / departures board | A pulled-from resource, not a real-time feed |
 | Knowledge pack | Country-specific entry rules / airline policy doc | Written procedure for one class of crossing |
 | Skill | Packing strategy, hand-luggage discipline, language phrases | Portable across destinations |

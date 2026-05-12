@@ -10,11 +10,11 @@
 
 | Concept | Sport term | Use when |
 |---|---|---|
-| Principal | Captain (on the pitch) / head coach (above it) | The decision-maker — captain in the moment, coach across matches |
+| User | Captain (on the pitch) / head coach (above it) | The decision-maker — captain in the moment, coach across matches |
 | Expert (any tier) | Position player / specialist (striker, defender, keeper) | Owns one position; runs it; doesn't drift across the pitch |
 | Meta-expert | Head coach / manager | Sets the system; doesn't take the kicks |
 | Adversarial reviewer | Match referee / opposition scout / video analyst | Catches what the team normalised |
-| Subagent (Haiku/Sonnet) | Substitute / training-ground player | On the bench, ready, not in play |
+| Subagent | Substitute / training-ground player | On the bench, ready, not in play |
 | Domain expert | Specialist coach (set-piece, goalkeeping, fitness) | One narrow craft, deep practice |
 | Sub-expert pair | Two players competing for the same shirt | Deliberately differing on one axis; one starts, one waits |
 
@@ -27,7 +27,7 @@
 | Instinct file | Trained reflexes / muscle memory | What fires before conscious thought |
 | Notepad / reflex bank | Halftime team-talk notes | Reminders the coach surfaces between halves |
 | Working memory (post-/dream) | Post-match analysis bank | Vivid lessons from past matches the squad holds |
-| Hook (Claude Code) | The whistle / VAR check / substitution window | Fires automatically on a known trigger |
+| Hook | The whistle / VAR check / substitution window | Fires automatically on a known trigger |
 | MCP server | The bench / academy / training ground | Where the ready resources sit, not in play yet |
 | Knowledge pack | Team playbook / set-piece routines | Written plays for one class of situation |
 | Skill | A technique (free kicks, tackling, passing) | Portable across positions and matches |

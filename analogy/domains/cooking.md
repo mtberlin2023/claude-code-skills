@@ -1,6 +1,6 @@
 # cooking — domain pack
 
-> The kitchen brigade is hierarchical, time-bound, and unambiguous about who owns which station. That maps cleanly onto how a Claude Code session actually runs.
+> The kitchen brigade is hierarchical, time-bound, and unambiguous about who owns which station. That maps cleanly onto how an AI coding session actually runs.
 
 ---
 
@@ -8,11 +8,11 @@
 
 | Concept | Cooking term | Use when |
 |---|---|---|
-| Principal | Chef / chef de cuisine | The decision-maker walking the pass; signs off plates |
+| User | Chef / chef de cuisine | The decision-maker walking the pass; signs off plates |
 | Expert (any tier) | Chef de partie / line cook | Owns a station; runs that station; doesn't reach across |
 | Meta-expert | Sous chef / kitchen designer | Designs the brigade; doesn't cook in service |
 | Adversarial reviewer | A real critic at the table | Catches what the kitchen missed; not malicious, just precise |
-| Subagent (Haiku/Sonnet) | Commis / prep cook | Does the prep work; doesn't plate |
+| Subagent | Commis / prep cook | Does the prep work; doesn't plate |
 | Domain expert | Sommelier / pastry chef / butcher | Specialist station; called for one thing only |
 | Sub-expert pair | Craft pair (head pastry + pastry-coach) | Two voices on the same station, deliberately differing on one axis |
 
@@ -25,7 +25,7 @@
 | Instinct file | The cook's own muscle memory | What fires automatically before conscious thought |
 | Notepad / reflex bank | Pre-service briefing card on the wall | Reminders the cook glances at mid-shift |
 | Working memory (post-/dream) | Wall cards by the pass | The vivid lessons from last service the cook keeps in eyeline |
-| Hook (Claude Code) | Service bell / chit printer | Fires automatically when X happens |
+| Hook | Service bell / chit printer | Fires automatically when X happens |
 | MCP server | The pantry / walk-in / supplier delivery | Where the cook gets the ingredients from |
 | Knowledge pack | A cookbook / station playbook | Recipes for one section, written down, version-controlled |
 | Skill | A technique / trick of the trade | Knife skills, deglazing, mounting butter — portable across stations |
@@ -65,7 +65,7 @@
 
 ## Freeform mappings
 
-- **The pass** — the surface where Mark sees the answer. Everything has to cross it. The pass is the chat window.
+- **The pass** — the surface where the user sees the answer. Everything has to cross it. The pass is the chat window.
 - **Mise en place** — what's prepped and ready before the answer fires. Tool results, file reads, MCP queries. If mise is bad, service is bad.
 - **The walk-in** — your MCP store. Pulled from at the start of service; not a real-time fridge.
 - **The chit printer** — the hooks. Tickets fire automatically; cook responds.
@@ -76,7 +76,7 @@
 - **Family meal** — what the kitchen eats before service. Internal-only output; not for guests.
 - **Fire** — start cooking the dish (start executing the recommendation).
 - **Hold** — wait, don't fire yet (defer).
-- **Walking the pass** — Mark reading through the answer.
+- **Walking the pass** — the user reading through the answer.
 
 ## When the analogy doesn't fit
 

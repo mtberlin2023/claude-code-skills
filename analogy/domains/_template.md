@@ -1,6 +1,6 @@
 # <domain-name> — domain pack
 
-> One-line frame: what this domain *is* and why its vocabulary maps onto Claude Code work. (e.g. cooking → "kitchen brigade is hierarchical, time-bound, station-owned." sailing → "every crew member has a station, the wind sets the constraints, the captain calls trim.")
+> One-line frame: what this domain *is* and why its vocabulary maps onto AI coding work. (e.g. cooking → "kitchen brigade is hierarchical, time-bound, station-owned." sailing → "every crew member has a station, the wind sets the constraints, the captain calls trim.")
 
 ---
 
@@ -12,7 +12,7 @@ A domain pack must cover four sections at minimum. Below them, freeform.
 
 | Concept | <domain> term | Use when |
 |---|---|---|
-| Principal | | |
+| User | | |
 | Expert | | |
 | Meta-expert | | |
 | Adversarial reviewer | | |

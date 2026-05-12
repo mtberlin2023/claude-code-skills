@@ -8,11 +8,11 @@
 
 | Concept | Construction term | Use when |
 |---|---|---|
-| Principal | Developer / client | Pays for the build, signs off, holds the land |
+| User | Developer / client | Pays for the build, signs off, holds the land |
 | Expert (any tier) | Specialist trade / contractor | Owns one trade (electrical, structural, mechanical); doesn't reach across |
 | Meta-expert | Architect / lead designer | Designs the system; doesn't build it |
 | Adversarial reviewer | Building inspector / independent surveyor | Catches what the trades and the architect both missed |
-| Subagent (Haiku/Sonnet) | Apprentice / labourer | Does the prep and the simple runs; doesn't make calls |
+| Subagent | Apprentice / labourer | Does the prep and the simple runs; doesn't make calls |
 | Domain expert | Specialist consultant (acoustic / fire / planning) | One narrow technical question, deep expertise |
 | Sub-expert pair | Lead trade + second opinion | Two voices on the same trade, deliberately differing on one axis |
 
@@ -25,7 +25,7 @@
 | Instinct file | The trade's toolbox + muscle memory | What fires automatically before conscious thought |
 | Notepad / reflex bank | Site notebook / day book | Reminders the trade scribbles between rooms |
 | Working memory (post-/dream) | Lessons learned from the last project | What this trade brings forward from previous builds |
-| Hook (Claude Code) | Inspection trigger / cert renewal | Fires automatically when stage X is reached |
+| Hook | Inspection trigger / cert renewal | Fires automatically when stage X is reached |
 | MCP server | Builders' merchant / supply yard | Where ingredients arrive from; not on-site by default |
 | Knowledge pack | Method statement / trade standards (NHBC, NEC) | Written procedure for one class of work |
 | Skill | A trade qualification (wiring, plastering) | Portable across sites |
