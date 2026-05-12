@@ -2,7 +2,7 @@
 
 > Append the rules below to your existing `~/.claude/CLAUDE.md`. The skill itself lives at `claude-code-skills/analogy/`; this fragment wires the firing condition into your global rules.
 >
-> If you already have a "Cooking-analogy close" rule in your global CLAUDE.md (the original SuperMark one), this fragment is its operational expansion — they coexist cleanly.
+> If you already have a "Cooking-analogy close" rule in your global CLAUDE.md, this fragment is its operational expansion — they coexist cleanly.
 
 ---
 

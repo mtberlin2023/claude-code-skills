@@ -1,10 +1,10 @@
 # analogy
 
-> Reference implementation of the **Analogy Layer** described in *Analogies as Cognitive Interfaces* (Turrell 2026). A Claude Code skill that converts substantive AI output into a four-component reframe a user can mentally simulate: summary + mapping table + simulation prompt + limit statement.
+> Reference implementation of the **Analogy Layer** described in *Analogies as Cognitive Interfaces* (Turrell 2026). A skill that converts substantive AI output into a six-element reframe a user can mentally simulate: summary + mapping table + simulation prompt + limit statement + user-profile mislead tag + separate second-opinion pass.
 
-Cooking is the default pack. Four more ship: construction (layered roles + time), home (cumulative budget), travel (permissions + sequencing), sport (live coordination). Add your own; the rack is the same shape, the spices swap.
+Cooking is the default pack. Five more ship: construction (layered roles + time), environment (slow feedback + uncontrollable conditions; garden + ecosystem sub-modes), home (cumulative budget), travel (permissions + sequencing), sport (live coordination). Add your own; the rack is the same shape, the spices swap.
 
-**Status: v1.0 (private).** Audit layer is wired in but the corpus is still single-user. See `audit/README.md`.
+**Status: v1.1.** Audit layer wired with the seven-class signal taxonomy and the v1.1 validation gate; corpus is still single-user pending broader dogfood. See `audit/README.md`.
 
 ---
 
@@ -13,14 +13,15 @@ Cooking is the default pack. Four more ship: construction (layered roles + time)
 | You get | Why |
 |---|---|
 | `SKILL.md` — when to fire, how to render the 4-component output | Skill is consulted on options, tradeoffs, non-trivial reasoning. Not on lookups. |
-| `domains/cooking.md` (default) | Kitchen brigade, mise en place, the pass, plating — mapped to the concepts a Claude session actually surfaces (experts, hooks, MCPs, decisions, briefs, drift). |
+| `domains/cooking.md` (default) | Kitchen brigade, mise en place, the pass, plating — mapped to the concepts an AI coding session actually surfaces (experts, hooks, MCPs, decisions, briefs, drift). |
 | `domains/construction.md` | Layered roles + persistent obligations over time (§9b case). For risk-allocation, contracts, finance. |
 | `domains/home.md` | Cumulative-budget / household-economics frame (§10 subscription audit). |
 | `domains/travel.md` | Airport sub-domain: permissions, sequencing, graceful failure under load. |
 | `domains/sport.md` | Team coordination + role specialisation under live load (v3.6 §10.5 case). |
+| `domains/environment.md` | Slow indirect feedback + conditions you cannot control + emergent properties (paper §18 wishlist entry). Two anchor sub-modes: garden (cultivated, intervenable) and ecosystem (uncultivated, intervention cascades). |
 | `domains/_template.md` — pluggable contract | Add a domain in 4 sections: roles / gear / rhythms / verbs / when-this-doesn't-fit. Below that, freeform. |
 | `WORKED_EXAMPLES.md` | Three before/after fixtures from the paper's §8 / §9b / §10 — the layer working, with the delta named. |
-| `audit/` — instrumentation | `decisions.jsonl` append-only log + `check.py` rollup against the four §16 proxies. Lets you ask "did the layer actually help?" |
+| `audit/` — instrumentation | `decisions.jsonl` append-only log + `check.py` rollup against the four §16 proxies AND the v1.1 validation gate (seven-class signal taxonomy + five gate conditions). Lets you ask "did the layer actually help?" and "is it ready for public push?" |
 | `CLAUDE.md` / `AGENTS.md` — append-to-global fragments | Wire the firing condition into your harness's global rules. `CLAUDE.md` for Claude Code; `AGENTS.md` for Codex. Same content, retargeted. |
 
 ---
@@ -104,7 +105,7 @@ Honest about what it cannot tell you: structural soundness of the mapping, the n
 
 ## What this skill does NOT do
 
-- **Diagrams.** Visuals were considered (BRIEF-009, 2026-05-05); the call was 95% analogy, no diagrams. If you want diagrams, that's a separate skill.
+- **Diagrams.** Visuals were considered in an earlier design call (2026-05-05); the verdict was 95% analogy, no diagrams. If you want diagrams, that's a separate skill.
 - **Rich-domain expertise.** Packs are built on commonly-shared vocabulary, not specialist craft. A real chef's lens / a real surveyor's lens would be a different pack.
 - **Always-on for everything.** Lookups, progress reports, tool-result confirmations: skill stays out. Padding kills the signal.
 - **The paper itself.** This is the reference implementation. The paper lives at `projects/writing/whitepaper_studio/versions/analogy-layer/` and explains the why; this repo is the how.
@@ -113,13 +114,20 @@ Honest about what it cannot tell you: structural soundness of the mapping, the n
 
 ## Versioning
 
+- **v1.1** (2026-05-12) — extends the four-component output to a six-element spec with the §15A.1 false-confidence defences, and expands the audit instrumentation into a measurable validation gate.
+  - Shape A: 6 elements (added user-profile mislead tag + separate second-opinion pass)
+  - SKILL.md gains a §15A.1 defences subsection: limit statement at equal prominence (rendering rule), user-profile mislead tag (new element), second-opinion pass (new pass rendered alongside)
+  - Feedback verbs: 3 → 6 user-callable, mapped to a seven-class signal taxonomy (class 3 — false-confident — is post-hoc only, labelled in `outcome_label`)
+  - `audit/decisions.jsonl` schema: new `schema_version` field, `components` extended from 4 to 6 booleans, `outcome_label` gains `false_confident`
+  - `audit/check.py` rewritten: seven-class histogram + five-condition validation gate (sample size, class-7 floor, class-2+3 ceiling, class-5 ceiling, frame-rejection floor, components-all-6 floor). Backward compat with v1.0 records (excluded from gate, still counted in cadence / pack distribution)
+  - New domain pack: `environment` (sub-modes: garden + ecosystem) — paper §18 wishlist entry, first pack installed on structural-shape grounds rather than validated case material. Probe of the framework's pack-spec claim.
+  - `check.py` reports the v1.1 validation gate pass/fail on each rollup.
 - **v1.0** (2026-05-12) — reference implementation of the paper.
   - SKILL.md upgraded to the four-component output (summary / mapping / simulation / limit) per §15
   - Four new packs: `construction`, `home`, `travel`, `sport`
   - `audit/` scaffold (decisions.jsonl + check.py + REPORT.md template) — maps to §16
   - `WORKED_EXAMPLES.md` — three before/after fixtures from §8 / §9b / §10
   - Feedback verbs: `redo`, `flag_misleading`, `lock`
-  - Private. No public push pending audit-pattern validation.
 - v0.1 (2026-05-05) — first cut. Cooking pack only. Shape A reframe paragraph only (1/4 of the spec).
 
 ## Companion rule in global instructions
@@ -130,4 +138,4 @@ The existing "Cooking-analogy close" rule (if present in your global `CLAUDE.md`
 
 ## Paper
 
-`projects/writing/whitepaper_studio/versions/analogy-layer/v2_0_full_paper.md` (and later versions). Read the paper for the *why*; read this README + `SKILL.md` + `WORKED_EXAMPLES.md` for the *how*.
+*Analogies as Cognitive Interfaces* (Turrell 2026). Live worked examples at [supermark.live/analogy](https://supermark.live/analogy). Read the paper for the *why*; read this README + `SKILL.md` + `WORKED_EXAMPLES.md` for the *how*.

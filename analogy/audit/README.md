@@ -25,19 +25,20 @@ One JSON object per line. Required fields marked **(req)**.
 
 | Field | Type | Notes |
 |---|---|---|
+| `schema_version` | string | `"1.0"` (legacy) or `"1.1"` (current). Absent → treated as `"1.0"` by `check.py`. Only v1.1 records contribute to the validation gate; v1.0 records still count toward cadence and pack distribution. |
 | `ts` **(req)** | ISO-8601 string | When the invocation fired |
 | `session_id` | string \| null | Claude Code session ID if available |
 | `trigger_conditions` **(req)** | list of strings | Which of the five fire conditions matched: `options` / `tradeoff` / `non_trivial` / `redesign` / `risk` |
 | `domain_used` **(req)** | string | One of: `cooking`, `construction`, `home`, `travel`, `sport`, or a custom pack |
 | `domain_override_reason` | string \| null | If the skill switched away from the default pack, why (one short line) |
-| `components` **(req)** | object | Boolean flags: `{summary, mapping_table, simulation_prompt, limit_statement}` |
+| `components` **(req)** | object | Boolean flags for all six output elements: `{summary, mapping_table, simulation_prompt, limit_statement, mislead_tag, second_opinion_pass}`. The last two are the §15A.1 defences against class 3 (false-confident) — see `SKILL.md`. A full v1.1 rendering ships all six. |
 | `frame_rejection` **(req)** | boolean | Did the user reject the option set after the analogy reframe? §8's claim — the most distinctive measure |
-| `user_feedback` | string \| null | `redo:<domain>` \| `flag_misleading` \| `lock` \| `null` |
+| `user_feedback` | string \| null | One of the six user-callable verbs from `SKILL.md`: `flag_unfamiliar` \| `flag_misleading` \| `flag_bleed` \| `drop_analogy` \| `redo:<domain>` \| `redo_scale:<scale>` \| `lock` \| `null`. Maps to classes 1, 2, 4, 5, 6, 6, 7 respectively. Class 3 (false-confident) is post-hoc only — see `outcome_label` below. |
 | `decision_class` | string \| null | `build` \| `triage` \| `audit` \| `explanation` — matches paper §8/§9/§10 case types |
-| `outcome_label` | string \| null | Filled in retrospectively: `comfort` \| `quality` \| `both` \| `unknown`. Honest about post-hoc labelling. |
+| `outcome_label` | string \| null | Filled in retrospectively: `comfort` \| `quality` \| `both` \| `false_confident` \| `unknown`. `false_confident` is the class 3 label — the user simulated confidently against the analogy but the substrate behaved differently. Honest about post-hoc labelling: this field captures judgements made after the decision, not at invocation. |
 | `notes` | string \| null | Free-form. Optional. |
 
-The `components` object is what makes the audit work — it lets `check.py` count how often the skill ships all four spec components vs how often it degrades to two. A 3-of-4 average tells you the skill is in `0.1` shape with a `1.0` frontmatter.
+The `components` object is what makes the audit work — `check.py` rolls up how often the skill ships all six elements vs how often it degrades. The gate threshold is 80% all-six. A consistent 4-of-6 pattern means the §15A.1 defences (`mislead_tag` + `second_opinion_pass`) are dropping out — the skill is running in v1.0 shape inside a v1.1 frontmatter, not v1.1 itself.
 
 ---
 

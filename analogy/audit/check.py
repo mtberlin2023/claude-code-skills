@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Analogy-layer audit check.
+Analogy-layer audit check (v1.1 schema).
 
-Reads decisions.jsonl and reports on the four §16 proxy measures:
-  1. Invocation count + cadence (decision-speed proxy)
-  2. Frame-rejection rate (§8's distinctive claim)
-  3. Component completeness — fraction shipping all four of
-     (summary, mapping_table, simulation_prompt, limit_statement)
-  4. Comfort-vs-quality split from outcome_label
+Reads decisions.jsonl and reports on:
+  - The §16 proxy measures (cadence, frame-rejection, component completeness,
+    outcome labels)
+  - The 7-class signal taxonomy from §15A's feedback loop, extended
+  - The five-condition validation gate (v1.1 records only)
+
+Backward compat: records without `schema_version` or with `schema_version: "1.0"`
+are treated as v1.0 and excluded from the v1.1 gate metrics. They still count
+toward cadence and pack distribution.
 
 Stdlib only. Python 3.10+.
 
@@ -30,7 +33,65 @@ HERE = Path(__file__).resolve().parent
 LOG = HERE / "decisions.jsonl"
 REPORT = HERE / "REPORT.md"
 
-REQUIRED_COMPONENTS = ("summary", "mapping_table", "simulation_prompt", "limit_statement")
+V1_1_COMPONENTS = (
+    "summary",
+    "mapping_table",
+    "simulation_prompt",
+    "limit_statement",
+    "mislead_tag",
+    "second_opinion_pass",
+)
+V1_0_COMPONENTS = (
+    "summary",
+    "mapping_table",
+    "simulation_prompt",
+    "limit_statement",
+)
+
+# user_feedback string → signal class. Class 3 is post-hoc only (see outcome_label).
+FEEDBACK_TO_CLASS = {
+    "flag_unfamiliar": 1,
+    "flag_misleading": 2,
+    "flag_bleed": 4,
+    "drop_analogy": 5,
+    "lock": 7,
+}
+# `redo:<domain>` and `redo_scale:<scale>` both map to class 6 (sub-mode / scale mismatch)
+REDO_PREFIXES = ("redo:", "redo_scale:")
+
+CLASS_LABELS = {
+    1: "unfamiliar (didn't clarify)",
+    2: "misleading (wrong inference)",
+    3: "false-confident (post-hoc)",
+    4: "substrate bleed",
+    5: "analogy capture (didn't need one)",
+    6: "sub-mode / scale mismatch",
+    7: "worked — locked",
+}
+
+# v1.1 validation-gate thresholds. Adjust here if you want to tune the gate.
+GATE_MIN_N = 40
+GATE_CLASS_7_MIN_PCT = 30.0
+GATE_CLASS_2_3_MAX_PCT = 15.0
+GATE_CLASS_5_MAX_PCT = 10.0
+GATE_FRAME_REJECTION_MIN_PCT = 15.0
+GATE_COMPONENTS_MIN_PCT = 80.0
+
+
+def schema_version(rec: dict) -> str:
+    return str(rec.get("schema_version") or "1.0")
+
+
+def feedback_class(rec: dict) -> int | None:
+    """Map a record's feedback or outcome label to a signal class 1-7, or None."""
+    fb = rec.get("user_feedback") or ""
+    if fb in FEEDBACK_TO_CLASS:
+        return FEEDBACK_TO_CLASS[fb]
+    if any(fb.startswith(p) for p in REDO_PREFIXES):
+        return 6
+    if rec.get("outcome_label") == "false_confident":
+        return 3
+    return None
 
 
 def load(since: str | None, pack: str | None) -> list[dict]:
@@ -64,10 +125,21 @@ def pct(n: int, total: int) -> str:
     return f"{(100 * n / total):.1f}%" if total else "n/a"
 
 
+def gate_line(name: str, value_pct: float, threshold: float, min_or_max: str, passed: bool) -> str:
+    marker = "✓ PASS" if passed else "✗ FAIL"
+    op = "≥" if min_or_max == "min" else "≤"
+    return f"- **{name}** — {value_pct:.1f}% (gate: {op} {threshold:.0f}%) — {marker}"
+
+
 def summarise(records: list[dict]) -> str:
     n = len(records)
     if n == 0:
         return "No invocations logged. Run the skill, or add records by hand to decisions.jsonl."
+
+    v1_1 = [r for r in records if schema_version(r) == "1.1"]
+    v1_0 = [r for r in records if schema_version(r) != "1.1"]
+    n_v11 = len(v1_1)
+    n_v10 = len(v1_0)
 
     pack_counts = Counter(r.get("domain_used", "unknown") for r in records)
     trigger_counts: Counter[str] = Counter()
@@ -75,20 +147,24 @@ def summarise(records: list[dict]) -> str:
         for t in r.get("trigger_conditions") or []:
             trigger_counts[t] += 1
 
-    frame_rejected = sum(1 for r in records if r.get("frame_rejection"))
-    flag_misleading = sum(1 for r in records if (r.get("user_feedback") or "").startswith("flag_misleading"))
-    redo_any = sum(1 for r in records if (r.get("user_feedback") or "").startswith("redo"))
-    locks = sum(1 for r in records if r.get("user_feedback") == "lock")
+    frame_rejected_all = sum(1 for r in records if r.get("frame_rejection"))
+    frame_rejected_v11 = sum(1 for r in v1_1 if r.get("frame_rejection"))
 
-    complete = 0
-    component_hits: Counter[str] = Counter()
-    for r in records:
+    complete_v11 = 0
+    component_hits_v11: Counter[str] = Counter()
+    for r in v1_1:
         comps = r.get("components") or {}
-        if all(comps.get(k) for k in REQUIRED_COMPONENTS):
-            complete += 1
-        for k in REQUIRED_COMPONENTS:
+        if all(comps.get(k) for k in V1_1_COMPONENTS):
+            complete_v11 += 1
+        for k in V1_1_COMPONENTS:
             if comps.get(k):
-                component_hits[k] += 1
+                component_hits_v11[k] += 1
+
+    class_counts_v11: Counter[int] = Counter()
+    for r in v1_1:
+        c = feedback_class(r)
+        if c is not None:
+            class_counts_v11[c] += 1
 
     outcome_counts = Counter((r.get("outcome_label") or "unlabelled") for r in records)
     decision_class_counts = Counter((r.get("decision_class") or "unclassified") for r in records)
@@ -97,13 +173,70 @@ def summarise(records: list[dict]) -> str:
     ts_last = max((r.get("ts") for r in records if r.get("ts")), default=None)
 
     lines: list[str] = []
-    lines.append(f"# Analogy Audit — Rollup")
+    lines.append("# Analogy Audit — Rollup")
     lines.append("")
     lines.append(f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
-    lines.append(f"Invocations: **{n}**  ·  First: {ts_first}  ·  Last: {ts_last}")
+    lines.append(f"Invocations: **{n}** total  ·  v1.1: **{n_v11}**  ·  v1.0 legacy: **{n_v10}**")
+    lines.append(f"First: {ts_first}  ·  Last: {ts_last}")
     lines.append("")
-    lines.append("## §16-proxy 1 — Cadence")
-    lines.append(f"Total invocations: **{n}**")
+
+    # ─── v1.1 validation gate ────────────────────────────────────────────
+    lines.append("## v1.1 Validation gate")
+    if n_v11 == 0:
+        lines.append("_No v1.1 records yet. Gate cannot evaluate._")
+        lines.append("")
+    else:
+        c2 = class_counts_v11[2]
+        c3 = class_counts_v11[3]
+        c5 = class_counts_v11[5]
+        c7 = class_counts_v11[7]
+        c23 = c2 + c3
+
+        c7_pct = 100.0 * c7 / n_v11
+        c23_pct = 100.0 * c23 / n_v11
+        c5_pct = 100.0 * c5 / n_v11
+        frame_pct = 100.0 * frame_rejected_v11 / n_v11
+        comp_pct = 100.0 * complete_v11 / n_v11
+
+        sample_pass = n_v11 >= GATE_MIN_N
+        c7_pass = c7_pct >= GATE_CLASS_7_MIN_PCT
+        c23_pass = c23_pct <= GATE_CLASS_2_3_MAX_PCT
+        c5_pass = c5_pct <= GATE_CLASS_5_MAX_PCT
+        frame_pass = frame_pct >= GATE_FRAME_REJECTION_MIN_PCT
+        comp_pass = comp_pct >= GATE_COMPONENTS_MIN_PCT
+
+        all_pass = all((sample_pass, c7_pass, c23_pass, c5_pass, frame_pass, comp_pass))
+
+        marker = "✓ PASS" if sample_pass else "✗ FAIL"
+        lines.append(f"- **Sample size** — {n_v11} of {GATE_MIN_N} required — {marker}")
+        lines.append(gate_line("Class 7 (worked, locked)", c7_pct, GATE_CLASS_7_MIN_PCT, "min", c7_pass))
+        lines.append(gate_line("Class 2 + 3 (misleading + false-confident)", c23_pct, GATE_CLASS_2_3_MAX_PCT, "max", c23_pass))
+        lines.append(gate_line("Class 5 (analogy capture)", c5_pct, GATE_CLASS_5_MAX_PCT, "max", c5_pass))
+        lines.append(gate_line("Frame-rejection rate", frame_pct, GATE_FRAME_REJECTION_MIN_PCT, "min", frame_pass))
+        lines.append(gate_line("Component completeness (all 6)", comp_pct, GATE_COMPONENTS_MIN_PCT, "min", comp_pass))
+        lines.append("")
+        verdict = "✓ PASS — ready for public push" if all_pass else "✗ FAIL — continue dogfood"
+        lines.append(f"**Overall gate:** {verdict}")
+        lines.append("")
+
+    # ─── 7-class signal taxonomy histogram ───────────────────────────────
+    lines.append("## 7-class signal taxonomy (v1.1 records only)")
+    if n_v11 == 0:
+        lines.append("_No v1.1 records yet._")
+    else:
+        lines.append("")
+        lines.append("| Class | Label | Count | % of v1.1 |")
+        lines.append("|---|---|---|---|")
+        for cls in range(1, 8):
+            count = class_counts_v11[cls]
+            lines.append(f"| {cls} | {CLASS_LABELS[cls]} | {count} | {pct(count, n_v11)} |")
+        unlabelled = n_v11 - sum(class_counts_v11.values())
+        lines.append(f"| — | (no feedback / no class label) | {unlabelled} | {pct(unlabelled, n_v11)} |")
+    lines.append("")
+
+    # ─── §16 proxies ─────────────────────────────────────────────────────
+    lines.append("## §16-proxy — Cadence")
+    lines.append(f"Total invocations: **{n}** ({n_v11} v1.1, {n_v10} v1.0 legacy)")
     if ts_first and ts_last and ts_first != ts_last:
         try:
             d_first = datetime.fromisoformat(ts_first.replace("Z", "+00:00"))
@@ -113,23 +246,24 @@ def summarise(records: list[dict]) -> str:
         except ValueError:
             pass
     lines.append("")
-    lines.append("## §16-proxy 2 — Frame rejection")
-    lines.append(f"Frame-rejected: **{frame_rejected}** of {n} ({pct(frame_rejected, n)})")
-    lines.append(f"This is §8's most distinctive claim. n=1 cannot validate; n>20 starts to inform.")
+    lines.append("## §16-proxy — Frame rejection")
+    lines.append(f"All records: **{frame_rejected_all}** of {n} ({pct(frame_rejected_all, n)})")
+    lines.append(f"v1.1 only: **{frame_rejected_v11}** of {n_v11} ({pct(frame_rejected_v11, n_v11)})")
     lines.append("")
-    lines.append("## §16-proxy 3 — Component completeness")
-    lines.append(f"Invocations shipping all four §15 components: **{complete}** of {n} ({pct(complete, n)})")
+    lines.append("## §16-proxy — Component completeness (v1.1 records)")
+    lines.append(f"Invocations shipping all six v1.1 components: **{complete_v11}** of {n_v11} ({pct(complete_v11, n_v11)})")
+    if n_v11:
+        lines.append("")
+        lines.append("| Component | Hits (v1.1) | % |")
+        lines.append("|---|---|---|")
+        for k in V1_1_COMPONENTS:
+            lines.append(f"| `{k}` | {component_hits_v11[k]} | {pct(component_hits_v11[k], n_v11)} |")
     lines.append("")
-    lines.append("| Component | Hits | % |")
-    lines.append("|---|---|---|")
-    for k in REQUIRED_COMPONENTS:
-        lines.append(f"| `{k}` | {component_hits[k]} | {pct(component_hits[k], n)} |")
-    lines.append("")
-    lines.append("## §16-proxy 4 — Comfort vs quality (post-hoc labels)")
+    lines.append("## §16-proxy — Comfort vs quality (post-hoc labels)")
     for label, count in sorted(outcome_counts.items(), key=lambda x: (-x[1], x[0])):
         lines.append(f"- `{label}` — {count} ({pct(count, n)})")
     lines.append("")
-    lines.append("> Labels are post-hoc and self-reported. Comfort labels likely outnumber quality labels in real-world use; watch the distribution closely.")
+    lines.append("> Labels are post-hoc and self-reported. Comfort labels likely outnumber quality labels in real-world use; watch the distribution.")
     lines.append("")
     lines.append("## Pack distribution")
     for pack_name, count in sorted(pack_counts.items(), key=lambda x: (-x[1], x[0])):
@@ -142,11 +276,6 @@ def summarise(records: list[dict]) -> str:
     lines.append("## Decision class")
     for dc, count in sorted(decision_class_counts.items(), key=lambda x: (-x[1], x[0])):
         lines.append(f"- `{dc}` — {count}")
-    lines.append("")
-    lines.append("## Feedback verbs")
-    lines.append(f"- `redo:*` — {redo_any}")
-    lines.append(f"- `flag_misleading` — {flag_misleading}")
-    lines.append(f"- `lock` — {locks}")
     lines.append("")
     lines.append("---")
     lines.append("")
