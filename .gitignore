@@ -1,6 +1,30 @@
+# ── Public-promotion repo hygiene · DEFAULT-DENY ────────────────────────────
+# This repo is a PUBLIC calling card. Nothing is publishable unless explicitly
+# allow-listed below. This makes an accidental `git add -A` unable to stage a
+# private skill — and unlike .git/info/exclude, this file is COMMITTED, so the
+# protection survives a fresh clone on any machine. Add a new public skill only
+# by adding an explicit `!/<skill>/` line here.
+
+# Ignore everything at the repo root by default …
+/*
+
+# … then allow repo metadata …
+!/.gitignore
+!/LICENSE
+!/README.md
+
+# … and ONLY the public skills.
+!/analogy/
+!/statusline/
+
+# Keep this internal note out of the public analogy skill (was in info/exclude).
+analogy/domains/README.md
+
+# Re-ignore junk anywhere, including inside the allowed public skills.
 .DS_Store
+**/.DS_Store
 *.swp
 *.swo
 *~
-__pycache__/
 *.pyc
+__pycache__/
