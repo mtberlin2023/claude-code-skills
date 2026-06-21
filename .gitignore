@@ -20,6 +20,14 @@
 # Keep this internal note out of the public analogy skill (was in info/exclude).
 analogy/domains/README.md
 
+# Re-ignore real secrets anywhere, even inside an allow-listed public skill.
+# A whitelisted skill dir would otherwise expose any real env file dropped into
+# it (e.g. statusline/.worldcup.env). The blank *.example files are NOT matched
+# by these patterns, so they still publish.
+**/.env
+**/.worldcup.env
+.worldcup.env
+
 # Re-ignore junk anywhere, including inside the allowed public skills.
 .DS_Store
 **/.DS_Store

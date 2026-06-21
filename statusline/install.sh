@@ -7,9 +7,11 @@
 # What it does (idempotent — safe to re-run):
 #   1. Creates ~/.claude/hooks/ if missing.
 #   2. Copies statusline.sh and forecast_gap.py to ~/.claude/hooks/.
-#   3. Backs up ~/.claude/settings.json (timestamped) and sets statusLine.command
+#   3. Copies the optional World Cup feed (worldcup-feed.py, worldcup.sh, the demo
+#      seed + env example) alongside it, seeding worldcup-data.json if absent.
+#   4. Backs up ~/.claude/settings.json (timestamped) and sets statusLine.command
 #      to point at the installed script. Existing hooks / other settings untouched.
-#   4. Prints a verification summary.
+#   5. Prints a verification summary.
 #
 # Uninstall:
 #   bash install.sh --uninstall
@@ -70,8 +72,17 @@ PYEOF
   rm -f "$HOOKS_DIR/statusline.sh"
   rm -f "$HOOKS_DIR/forecast_gap.py"
   rm -f "$HOOKS_DIR/.forecast-cache.json"
+  # World Cup feed scripts + the toggle flag + the shipped example files. The
+  # user's real .worldcup.env (API key) and any live-pulled worldcup-data.json
+  # are intentionally left in place.
+  rm -f "$HOOKS_DIR/worldcup-feed.py"
+  rm -f "$HOOKS_DIR/worldcup.sh"
+  rm -f "$HOOKS_DIR/worldcup-data.example.json"
+  rm -f "$HOOKS_DIR/.worldcup.env.example"
+  rm -f "$HOOKS_DIR/.worldcup-feed-on"
   c_green "Removed installed scripts."
   c_dim "Your Claude Code transcripts (~/.claude/projects/) were not touched."
+  c_dim "Your .worldcup.env (API key) and pulled worldcup-data.json were kept — delete them by hand if you want them gone."
   exit 0
 }
 
@@ -97,6 +108,24 @@ cp "$SKILL_DIR/forecast_gap.py" "$HOOKS_DIR/forecast_gap.py"
 chmod +x "$HOOKS_DIR/statusline.sh"
 c_green "✓ Installed statusline.sh   → $HOOKS_DIR/statusline.sh"
 c_green "✓ Installed forecast_gap.py → $HOOKS_DIR/forecast_gap.py"
+
+# ── 1b. Optional World Cup feed ────────────────────────────────────────────────
+# Copies the football-feed scripts beside statusline.sh so `worldcup.sh on` lights
+# up the tip line. The demo seed is copied to worldcup-data.json only if absent, so
+# a re-run never clobbers data you pulled live. The real .worldcup.env (your API
+# key) is never touched by the installer.
+if [[ -f "$SKILL_DIR/worldcup-feed.py" ]]; then
+  cp "$SKILL_DIR/worldcup-feed.py"          "$HOOKS_DIR/worldcup-feed.py"
+  cp "$SKILL_DIR/worldcup.sh"               "$HOOKS_DIR/worldcup.sh"
+  cp "$SKILL_DIR/worldcup-data.example.json" "$HOOKS_DIR/worldcup-data.example.json"
+  cp "$SKILL_DIR/.worldcup.env.example"     "$HOOKS_DIR/.worldcup.env.example"
+  chmod +x "$HOOKS_DIR/worldcup.sh"
+  if [[ ! -f "$HOOKS_DIR/worldcup-data.json" ]]; then
+    cp "$SKILL_DIR/worldcup-data.example.json" "$HOOKS_DIR/worldcup-data.json"
+    c_dim "  Seeded worldcup-data.json from the demo (delete it + run 'worldcup.sh pull' for live data)."
+  fi
+  c_green "✓ Installed World Cup feed  → $HOOKS_DIR/worldcup.sh  (enable: bash $HOOKS_DIR/worldcup.sh on)"
+fi
 
 # ── 2. Patch settings.json ───────────────────────────────────────────────────
 TARGET_CMD="bash $HOOKS_DIR/statusline.sh"
@@ -143,6 +172,12 @@ echo "    🟢 [N] XK next turn [· action] [· 5h cap] [· wk cap] [· runway]"
 echo
 c_dim "Customise the action slash command (optional):"
 echo "  export CLAUDE_CODE_STATUSLINE_ACTION=/compact   # default: /log"
+echo
+c_dim "World Cup feed (optional):"
+echo "  bash $HOOKS_DIR/worldcup.sh on        # show live football in the tip line"
+echo "  bash $HOOKS_DIR/worldcup.sh off       # back to normal"
+echo "  # for live data: copy .worldcup.env.example → .worldcup.env, add your"
+echo "  # API-Football key, then: bash $HOOKS_DIR/worldcup.sh pull"
 echo
 c_dim "Uninstall:"
 echo "  bash $SKILL_DIR/install.sh --uninstall"

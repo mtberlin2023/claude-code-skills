@@ -51,8 +51,9 @@ bash install.sh
 
 The installer:
 1. Copies `statusline.sh` and `forecast_gap.py` to `~/.claude/hooks/`.
-2. Backs up your existing `~/.claude/settings.json` (timestamped) and sets `statusLine.command` to point at the installed script. Your existing hooks, permissions, and other settings are left alone.
-3. Prints a verification summary.
+2. Copies the optional [World Cup feed](#world-cup-feed-optional) (scripts + demo seed) alongside them, seeding `worldcup-data.json` only if it isn't already there.
+3. Backs up your existing `~/.claude/settings.json` (timestamped) and sets `statusLine.command` to point at the installed script. Your existing hooks, permissions, and other settings are left alone.
+4. Prints a verification summary.
 
 Open a new Claude Code session — the chip renders in the bottom-left bar.
 
@@ -74,13 +75,57 @@ export CLAUDE_CODE_STATUSLINE_ACTION=/compact
 
 Add the line to your shell rc file so it sticks. The statusline caches its output for 10 seconds, so after changing the env var you may see the old chip until the cache expires.
 
+## World Cup feed (optional)
+
+A toggleable extra: turn the tip line into a live football feed during a tournament. When it's on, the bottom bar appends a rotating line — live match (clock ticking, goals popping in), latest results, upcoming fixtures, and the Golden Boot race:
+
+```
+🟢 [12] 48K next turn · /log  ⏷ ⚽ GER 1–1 ESP  67'  🥅 Wirtz 67'
+```
+
+`install.sh` copies the feed scripts next to the statusline and seeds a self-contained **demo** dataset, so it works immediately with no API key:
+
+```bash
+bash worldcup.sh on              # show the feed in the tip line
+bash worldcup.sh off             # back to the normal statusline
+bash worldcup.sh status          # is it on? show the current line
+bash worldcup.sh teams GER ENG   # follow only these teams
+bash worldcup.sh teams clear     # show all teams again
+bash worldcup.sh review GER       # full goal-by-goal card for a team's match
+```
+
+(Run these from `~/.claude/hooks/`, where the installer put them.)
+
+### Live data (API-Football)
+
+The demo seed is fixed sample data. For real scores, plug in an [API-Football](https://www.api-football.com/) key:
+
+1. Sign up at api-football.com. The free tier covers occasional manual pulls; the Pro tier (7,500 requests/day) is plenty for the auto-poller below.
+2. In `~/.claude/hooks/`, copy the example env file and add your key:
+   ```bash
+   cd ~/.claude/hooks
+   cp .worldcup.env.example .worldcup.env
+   # then edit .worldcup.env →  API_FOOTBALL_KEY=your_key_here
+   ```
+3. Pull live data and turn the feed on:
+   ```bash
+   bash worldcup.sh pull
+   bash worldcup.sh on
+   ```
+
+`.worldcup.env` holds a real secret and is gitignored — never commit it. A failed pull (no key, network error, quota) is a no-op: it leaves the existing data untouched, so the feed never goes blank.
+
+**Auto-refresh (optional).** `python3 worldcup-feed.py --poll` is a scheduler tick: it pulls only when the feed is toggled on and the tiered interval has elapsed (60s while a match is live, 900s when idle), and stops once the tournament's `end_epoch` passes. Point a `cron` job or a launchd timer at it every 60s for hands-off updates; without it, `worldcup.sh pull` refreshes on demand.
+
+When the tournament ends (past `end_epoch` in the data), the feed goes dormant and the tip line silently falls back to normal — a calling card shouldn't show stale scores.
+
 ## Requirements
 
 - macOS or Linux (tested on macOS; Linux likely works but untested).
 - `bash` and `python3` 3.8+.
 - Claude Code installed at least once so `~/.claude/` exists.
 
-No Python packages required. No network access.
+No Python packages required. The core statusline makes no network calls; only the optional World Cup feed's live `pull` reaches out (to API-Football).
 
 ## How it works
 

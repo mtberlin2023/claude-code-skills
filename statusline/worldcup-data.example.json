@@ -1,0 +1,55 @@
+{
+  "_note": "DEMO seed for the World Cup statusline feed. Copy this to worldcup-data.json to see the feed work with NO API key. Run `bash worldcup.sh pull` (with a key in .worldcup.env) to replace it with live data. All matches below are illustrative, not real results.",
+  "tournament": "World Cup 2026",
+  "anchor_epoch": 1781470146,
+  "live": {
+    "enabled": true,
+    "loop": true,
+    "home": "GER",
+    "away": "ESP",
+    "stage": "Quarter-final",
+    "kickoff_epoch": 1700000000,
+    "seconds_per_match_minute": 9,
+    "ft_pause_seconds": 90,
+    "goals": [
+      { "minute": 23, "team": "home", "scorer": "Musiala" },
+      { "minute": 41, "team": "away", "scorer": "Yamal" },
+      { "minute": 67, "team": "home", "scorer": "Wirtz" }
+    ],
+    "events": [
+      { "minute": 58, "type": "yellow", "player": "Rodri" },
+      { "minute": 74, "type": "red", "player": "Carvajal" }
+    ]
+  },
+  "results": [
+    {
+      "home": "BRA",
+      "away": "ARG",
+      "hs": 2,
+      "as": 1,
+      "stage": "Quarter-final",
+      "goals": [
+        { "minute": "12", "team": "home", "scorer": "V. Júnior" },
+        { "minute": "55", "team": "away", "scorer": "L. Messi", "pen": true },
+        { "minute": "88", "team": "home", "scorer": "Rodrygo" }
+      ]
+    },
+    {
+      "home": "FRA",
+      "away": "ENG",
+      "hs": 0,
+      "as": 0,
+      "stage": "Quarter-final",
+      "goals": []
+    }
+  ],
+  "fixtures": [
+    { "home": "NED", "away": "POR", "stage": "Semi-final" },
+    { "home": "USA", "away": "MEX", "stage": "Semi-final" }
+  ],
+  "top_scorers": [
+    { "name": "K. Mbappé", "team": "FRA", "goals": 6 },
+    { "name": "H. Kane", "team": "ENG", "goals": 5 },
+    { "name": "V. Júnior", "team": "BRA", "goals": 4 }
+  ]
+}

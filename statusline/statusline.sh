@@ -290,4 +290,18 @@ PYEOF
 )
 
 [ -z "$OUTPUT" ] && exit 0
+
+# --- World Cup feed (optional) --------------------------------------------
+# When the feed is toggled on (`bash worldcup.sh on`), append its live football
+# line to the statusline tip slot. The toggle flag, feed script and data all sit
+# beside this script (install.sh copies them here). Silent no-op if the feed is
+# off, python3 errors, or the feed returns nothing (e.g. after the tournament
+# ends). Runs only on cache-miss, so it rides the same 10s cadence the feed
+# rotates on.
+WC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$WC_DIR/.worldcup-feed-on" ]; then
+    WC_LINE=$(python3 "$WC_DIR/worldcup-feed.py" 2>/dev/null)
+    [ -n "$WC_LINE" ] && OUTPUT="$OUTPUT  ⏷ $WC_LINE"
+fi
+
 printf '%s\n' "$OUTPUT" | tee "$CACHE"
