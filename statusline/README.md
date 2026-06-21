@@ -142,7 +142,7 @@ Silent on failure. If anything breaks, the chip just disappears — your termina
 
 ## Further reading
 
-- **Whitepaper:** _link coming soon_ — the full cost model (why R is the only number that matters, data on replay costs across 37 sessions, the behaviour changes that come from putting the number on-screen).
+- **Write-up:** the full cost model — why R is the only number that matters, replay-cost data across 37 sessions, and what changes when you put the number on-screen — at **[SuperMark.live](https://supermark.live)**.
 
 ## License
 
