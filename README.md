@@ -7,7 +7,8 @@ A small collection of reusable skills for [Claude Code](https://claude.ai/claude
 | Skill | Description | Difficulty |
 |-------|-------------|------------|
 | [analogy](./analogy/) | Reference implementation of the **Analogy Layer** — converts substantive AI output into a six-element reframe the reader can mentally simulate (mapping table + simulation prompt + limit statement + mislead tag + second-opinion pass). Six pluggable domain packs (cooking default). | Intermediate |
-| [statusline](./statusline/) | Bottom-left status chip showing your next-turn replay cost, the 5-hour/weekly rate-limit caps with reset times, and weekly runway. | Beginner-friendly |
+| [statusline](./statusline/) | Bottom-left status chip showing your next-turn replay cost, the 5-hour/weekly rate-limit caps with reset times, and weekly runway. Bundles the World Cup feed as an optional add-on. | Beginner-friendly |
+| [worldcup](./worldcup/) | Live football feed in the bottom bar — ticking scores, goals/cards, full-time results with scorers, fixture countdowns, and the Golden Boot race. Standalone (no cost chip); demo seed works with no API key. | Beginner-friendly |
 
 ## What Are Claude Code Skills?
 

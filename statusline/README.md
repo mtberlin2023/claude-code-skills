@@ -83,6 +83,8 @@ A toggleable extra: turn the tip line into a live football feed during a tournam
 🟢 [12] 48K next turn · /log  ⏷ ⚽ GER 1–1 ESP  67'  🥅 Wirtz 67'
 ```
 
+> **Want only the football line, without the cost chip?** Install the standalone [worldcup](../worldcup/) skill instead — `bash worldcup/install.sh`. Or, from this directory, `bash install.sh --worldcup-only` defers straight to it. The feed scripts live in `../worldcup/` (one source of truth); this installer just copies them alongside the chip.
+
 `install.sh` copies the feed scripts next to the statusline and seeds a self-contained **demo** dataset, so it works immediately with no API key:
 
 ```bash
@@ -95,6 +97,34 @@ bash worldcup.sh review GER       # full goal-by-goal card for a team's match
 ```
 
 (Run these from `~/.claude/hooks/`, where the installer put them.)
+
+### What each rotation state looks like
+
+The feed cycles one line at a time (a new slot every ~10s), interleaving the live match with results, fixtures, and the scorers race. These are the real shapes it renders — each line is clipped to 64 chars to fit the bar:
+
+| State | Example line | When it shows |
+|---|---|---|
+| **Live — in-play** | `⚽ GER 1–1 ESP  67'  🥅 Wirtz 67'` | A match is on. The clock ticks (`67'`, `HT` at the break); a goal or card surfaces in the tail for ~8 match-minutes, newest event wins — a red card bumps an earlier goal: `⚽ GER 1–1 ESP  72'  🟥 Rüdiger 70'`. |
+| **Full-time result** | `🏁 FT  BRA 2–1 ARG  V. Júnior 12', Rodrygo 88' \| L. Messi 55' (p)` | After a match ends. Scorers split `home \| away`; `(p)` = penalty, `(og)` = own goal. |
+| **Upcoming fixture** | `⏰ NED v POR  in 2h30m · Semi-final` | A scheduled match. Countdown renders `in 5m`, `in 2h30m`, `in 3d`, or `soon` once kickoff is imminent; the stage tag (`Semi-final`, `Final`…) appears when known. |
+| **Golden Boot** | `👟 Golden Boot  K. Mbappé FRA 6` | The scorers race. A runner-up rotates in on its own slot: `👟 H. Kane ENG 5 goals`. |
+| **Dormant** | *(nothing — normal tip line)* | After the tournament's `end_epoch` passes. The feed emits no line and the bar silently falls back to its usual tip — a calling card shouldn't show stale scores. |
+
+When you turn it on with `worldcup.sh on`, the live line leads and the bar reads like:
+
+```
+🟢 [12] 48K next turn · /log  ⏷ ⚽ GER 1–1 ESP  67'  🥅 Wirtz 67'
+```
+
+`worldcup.sh review <TEAM>` opens the full goal-by-goal card for a finished match, off the bar and in the terminal:
+
+```
+⚽  Germany 2–1 Spain  ·  FT  ·  Semi-final
+
+  12'    1–0   Wirtz  (GER)
+  34'    1–1   Pedri  (ESP)
+  78'    2–1   Havertz  (pen)  (GER)
+```
 
 ### Live data (API-Football)
 
